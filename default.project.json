@@ -1,0 +1,23 @@
+{
+  "name": "DedhecPanel",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "DedhecPanel": {
+        "$path": "src/shared"
+      }
+    },
+    "ServerScriptService": {
+      "DedhecPanelServer": {
+        "$path": "src/server"
+      }
+    },
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "DedhecPanelClient": {
+          "$path": "src/client"
+        }
+      }
+    }
+  }
+}
