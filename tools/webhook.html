@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en" class="no-js">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Webhook Setup | National Security Agency</title>
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#04070c">
+<link rel="icon" type="image/png" href="../assets/img/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700;800&family=Cinzel:wght@600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/css/site.css">
+<style>
+.tool { padding: 36px 40px; display: grid; gap: 22px; }
+.tool ol { margin: 0; padding-left: 20px; color: var(--text-2); line-height: 1.8; font-size: 14.5px; }
+.tool ol code, .tool p code { font-family: var(--mono); font-size: 12.5px; color: var(--gold-2); background: rgba(212, 169, 55, 0.08); padding: 2px 6px; border-radius: 4px; }
+.row-btns { display: flex; gap: 10px; flex-wrap: wrap; }
+.out { font-family: var(--mono); font-size: 12.5px; color: var(--gold-2); background: rgba(4, 8, 14, 0.85); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; word-break: break-all; min-height: 48px; }
+.msg { font-family: var(--mono); font-size: 12px; letter-spacing: 0.04em; min-height: 18px; }
+.msg.ok { color: var(--green); }
+.msg.bad { color: var(--red); }
+.msg.warn { color: var(--amber); }
+@media (max-width: 760px) { .tool { padding: 24px 20px; } }
+</style>
+</head>
+<body>
+<div class="classbar">COMMAND STAFF // SUBMISSION ENDPOINT SETUP</div>
+<header class="site-header">
+  <div class="inner">
+    <a class="brand" href="../">
+      <img src="../assets/img/seal.webp" alt="National Security Agency seal" width="44" height="44">
+      <div>
+        <strong>NATIONAL SECURITY AGENCY</strong>
+        <span>CYBERSECURITY DIRECTORATE</span>
+      </div>
+    </a>
+  </div>
+</header>
+<div class="wrap">
+  <section class="panel tool">
+    <span class="corner tl"></span><span class="corner br"></span>
+    <div>
+      <div class="eyebrow">Command Staff Only</div>
+      <h2 style="margin-top: 10px;">Discord Webhook Setup</h2>
+      <p style="margin-top: 10px;">Encodes your webhook so bots that scan GitHub for raw Discord webhook links won't match it. Nothing you paste here is stored or sent anywhere except the optional test message, which goes straight to Discord.</p>
+    </div>
+    <div class="field">
+      <label for="url">Discord Webhook URL</label>
+      <input id="url" type="text" placeholder="https://discord.com/api/webhooks/123456789/abcDEF..." autocomplete="off" spellcheck="false">
+    </div>
+    <div class="row-btns">
+      <button class="btn primary" id="encodeBtn" type="button">Encode</button>
+      <button class="btn ghost" id="testBtn" type="button">Send Test Message</button>
+    </div>
+    <div class="msg" id="msg" aria-live="polite"></div>
+    <div>
+      <div class="section-label">Paste this line into assets/js/config.js</div>
+      <div class="out" id="out">webhook: "",</div>
+      <div class="row-btns" style="margin-top: 12px;"><button class="btn ghost" id="copyBtn" type="button" disabled>Copy Line</button></div>
+    </div>
+    <div>
+      <div class="section-label">Install</div>
+      <ol>
+        <li>Open <code>assets/js/config.js</code> in the repository on GitHub and click the pencil icon.</li>
+        <li>Replace the line <code>webhook: "",</code> with the copied line.</li>
+        <li>Commit the change. GitHub Pages republishes within a minute or two.</li>
+        <li>Open the assessment page and confirm the header shows <code>SECURE LINK</code>, not <code>LINK OFFLINE</code>.</li>
+      </ol>
+    </div>
+  </section>
+</div>
+<script src="../assets/js/site.js"></script>
+<script>
+(() => {
+  const RE = /^https:\/\/(?:(?:canary|ptb)\.)?discord(?:app)?\.com\/api\/(?:v\d+\/)?webhooks\/\d+\/[\w-]+\/?$/;
+  const $ = id => document.getElementById(id);
+  const say = (text, cls) => { const m = $("msg"); m.textContent = text; m.className = "msg " + (cls || ""); };
+  const read = () => {
+    const raw = $("url").value.trim();
+    let u;
+    try { u = new URL(raw); } catch (e) { return null; }
+    return RE.test(u.origin + u.pathname) ? u : null;
+  };
+  let line = "";
+  $("encodeBtn").addEventListener("click", () => {
+    const u = read();
+    if (!u) { say("That is not a Discord webhook URL. Copy it from Channel Settings → Integrations → Webhooks → Copy Webhook URL.", "bad"); return; }
+    const enc = btoa(u.href.split("").reverse().join(""));
+    line = 'webhook: "' + enc + '",';
+    $("out").textContent = line;
+    $("copyBtn").disabled = false;
+    say("Encoded. Copy the line below into config.js.", "ok");
+  });
+  $("copyBtn").addEventListener("click", async () => {
+    if (!line) return;
+    try {
+      await navigator.clipboard.writeText(line);
+      say("Copied to clipboard.", "ok");
+    } catch (e) {
+      const r = document.createRange();
+      r.selectNodeContents($("out"));
+      const sel = getSelection();
+      sel.removeAllRanges();
+      sel.addRange(r);
+      say("Select-all applied. Press Ctrl+C to copy.", "warn");
+    }
+  });
+  $("testBtn").addEventListener("click", async () => {
+    const u = read();
+    if (!u) { say("Enter a valid Discord webhook URL first.", "bad"); return; }
+    $("testBtn").disabled = true;
+    say("Checking webhook…");
+    let readable = false;
+    try {
+      const r = await fetch(u.href, { mode: "cors", credentials: "omit", cache: "no-store" });
+      readable = true;
+      if (r.status === 401 || r.status === 404) {
+        say("Discord rejected this webhook (HTTP " + r.status + "). It may have been deleted. Create a new one.", "bad");
+        $("testBtn").disabled = false;
+        return;
+      }
+    } catch (e) {}
+    const form = new FormData();
+    form.append("payload_json", JSON.stringify({
+      username: "NSA Recruitment Terminal",
+      allowed_mentions: { parse: [] },
+      embeds: [{ title: "Submission endpoint test", description: "If you can read this, the CSD-01 assessment can deliver submissions to this channel.", color: 13871415, timestamp: new Date().toISOString() }]
+    }));
+    try {
+      const post = new URL(u.href);
+      post.searchParams.set("wait", "true");
+      const r = await fetch(post.href, { method: "POST", body: form, mode: readable ? "cors" : "no-cors", credentials: "omit" });
+      if (readable && !r.ok) say("Discord returned HTTP " + r.status + ". The test message was not posted.", "bad");
+      else if (readable) say("Test message delivered. Check your Discord channel.", "ok");
+      else say("Test message sent. Check your Discord channel to confirm it arrived.", "warn");
+    } catch (e) {
+      say("Network error while sending. Check your connection and try again.", "bad");
+    }
+    $("testBtn").disabled = false;
+  });
+})();
+</script>
+</body>
+</html>
