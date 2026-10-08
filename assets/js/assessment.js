@@ -47,6 +47,7 @@ const resolveWebhook = raw => {
   try { u = new URL(url); } catch (e) { return null; }
   if (u.protocol !== "https:") return null;
   const discord = DISCORD_RE.test(u.origin + u.pathname);
+  if (discord) u.pathname = u.pathname.replace(/^\/api\/(?:v\d+\/)?/, "/api/v10/");
   const post = new URL(u.href);
   if (discord) post.searchParams.set("wait", "true");
   return { base: u.href, post: post.href, discord, transport: discord ? "no-cors" : "cors", status: "unchecked" };
@@ -87,6 +88,8 @@ const probeEndpoint = async () => {
 };
 
 const probe = probeEndpoint();
+
+const recheck = async first => first === "unverified" ? probeEndpoint() : first;
 
 const setOffline = msg => {
   const n = $("offlineNotice");
@@ -140,8 +143,10 @@ const show = id => {
   window.scrollTo({ top: 0, behavior: "smooth" });
 };
 
+const cleanCallsign = () => $("callsign").value.replace(/[\p{Cf}\u2800\u3164\uFFA0]/gu, "").replace(/\s+/g, " ").trim();
+
 const validate = () => {
-  const cs = $("callsign").value.trim();
+  const cs = /[\p{L}\p{N}]/u.test(cleanCallsign()) ? cleanCallsign() : "";
   const rk = $("rank").value;
   const pc = $("pc").checked;
   const ack = $("ack").checked;
@@ -158,7 +163,7 @@ const boot = () => new Promise(resolve => {
     ["", "> Establishing encrypted session ........... "],
     ["ok", "  [OK] TLS 1.3 / X25519MLKEM768 negotiated"],
     ["", "> Verifying candidate credentials ......... "],
-    ["ok", "  [OK] " + $("callsign").value.trim().toUpperCase() + " / " + $("rank").value + " cleared for " + CODE],
+    ["ok", "  [OK] " + cleanCallsign().toUpperCase() + " / " + $("rank").value + " cleared for " + CODE],
     ["", "> Randomizing item bank (" + BANK.length + " items, " + domainSet.length + " domains)"],
     ["ok", "  [OK] Item and option order sealed"],
     ["", "> Arming integrity monitor ................ "],
@@ -198,7 +203,8 @@ const start = async () => {
   }
   $("startBtn").disabled = true;
   show("boot");
-  const [, link] = await Promise.all([boot(), probe]);
+  const [, first] = await Promise.all([boot(), probe]);
+  const link = await recheck(first);
   if (link === "missing" || link === "invalid") {
     show("gate");
     toast("SUBMISSIONS OFFLINE: CONTACT COMMAND");
@@ -217,7 +223,8 @@ const start = async () => {
   state.startedAt = Date.now();
   state.endAt = state.startedAt + DURATION * 1000;
   state.running = true;
-  $("candidateMeta").textContent = $("callsign").value.trim() + " • " + $("rank").value;
+  if (document.visibilityState === "hidden" || !document.hasFocus()) openAway();
+  $("candidateMeta").textContent = cleanCallsign() + " • " + $("rank").value;
   buildNav();
   show("test");
   render();
@@ -234,8 +241,8 @@ const updateTimer = () => {
   if (left <= 0) finish("Time Expired");
 };
 
-const markTime = () => {
-  const now = Date.now();
+const markTime = (at) => {
+  const now = at || Date.now();
   if (state.viewing !== null) state.itemTime[state.viewing] += now - state.enteredAt;
   state.enteredAt = now;
 };
@@ -386,7 +393,7 @@ const fmtClock = ms => {
   return pad(Math.floor(s / 60)) + ":" + pad(s % 60);
 };
 
-const mdEscape = s => String(s).replace(/[\\`*_~|>#\[\]()]/g, "\\$&");
+const mdEscape = s => String(s).replace(/[\\`*_~|<>#:\[\]()]/g, "\\$&");
 const fileSafe = s => String(s).replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 24) || "candidate";
 const letter = (qi, oi) => String.fromCharCode(65 + state.optOrder[qi].indexOf(oi));
 
@@ -419,7 +426,7 @@ const grade = (reason, finishedAt) => {
     };
   });
   return {
-    callsign: $("callsign").value.trim(),
+    callsign: cleanCallsign(),
     rank: $("rank").value,
     reason,
     startedAt: state.startedAt,
@@ -526,7 +533,7 @@ const buildPayload = (r, tryNo) => {
     embed.thumbnail = { url: icon };
   }
   const payload = {
-    username: String(SITE.botName || "NSA Recruitment Terminal").slice(0, 80),
+    username: String(SITE.botName || "").replace(/discord|clyde/gi, "").replace(/\s+/g, " ").trim().slice(0, 80) || "NSA Recruitment Terminal",
     allowed_mentions: { parse: [] },
     embeds: [embed]
   };
@@ -548,8 +555,9 @@ const retryAfterMs = async res => {
     const j = await res.clone().json();
     s = Number(j.retry_after);
   } catch (e) {}
-  if (!Number.isFinite(s)) s = Number(res.headers.get("Retry-After"));
-  return Number.isFinite(s) && s >= 0 ? Math.min(15000, Math.ceil(s * 1000) + 250) : 2000;
+  const h = res.headers.get("Retry-After");
+  if (!Number.isFinite(s) && h !== null && h.trim() !== "") s = Number(h);
+  return (Number.isFinite(s) && s >= 0 ? Math.min(60000, Math.ceil(s * 1000) + 250) : 2000) + rand(1000);
 };
 
 const sendOnce = async (r, tryNo) => {
@@ -600,6 +608,7 @@ const setDelivery = (mode, detail) => {
     fail.classList.add("hidden");
     $("retryBtn").disabled = true;
     $("statusChip").textContent = "TRANSMITTING";
+    $("statusChip").classList.remove("off");
   } else if (mode === "sent") {
     tx.classList.add("ok");
     st.textContent = "Response Transmitted";
@@ -626,9 +635,12 @@ const setDelivery = (mode, detail) => {
 const deliver = async () => {
   if (!state.report || state.delivery === "sending" || state.delivery === "sent") return;
   setDelivery("sending");
+  if (endpoint && endpoint.status === "unverified" && await probeEndpoint() === "invalid") {
+    setDelivery("failed", "endpoint rejected");
+    return;
+  }
   const res = await transmit(state.report);
   if (res.ok) {
-    $("statusChip").classList.remove("off");
     setDelivery("sent", res.confirmed);
   } else {
     const d = res.status === "unconfigured" ? "no endpoint configured" : res.status === "network" ? "network error" : "HTTP " + res.status;
@@ -640,10 +652,10 @@ const finish = async (reason) => {
   if (!state.running) return;
   state.running = false;
   clearInterval(state.tick);
-  markTime();
+  const finishedAt = reason === "Time Expired" ? Math.min(Date.now(), state.endAt) : Date.now();
+  markTime(finishedAt);
   state.viewing = null;
-  if (state.away) closeAway();
-  const finishedAt = Date.now();
+  if (state.away) closeAway(finishedAt);
   const r = grade(reason, finishedAt);
   r.ref = "CSD-" + finishedAt.toString(36).toUpperCase();
   try { r.ref = await makeRef(r.callsign + "|" + r.rank + "|" + finishedAt + "|" + state.answers.join(",")); } catch (e) {}
@@ -663,9 +675,9 @@ const openAway = () => {
   state.away = { at: Date.now() - state.startedAt, since: Date.now() };
 };
 
-const closeAway = () => {
+const closeAway = (at) => {
   if (!state.away) return;
-  const ev = { at: state.away.at, dur: Date.now() - state.away.since };
+  const ev = { at: state.away.at, dur: Math.max(0, (typeof at === "number" ? at : Date.now()) - state.away.since) };
   state.away = null;
   state.focusEvents.push(ev);
   const fc = $("focusCount");

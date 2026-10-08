@@ -42,6 +42,7 @@ The webhook has to ship to every candidate's browser to work, so anyone determin
 - Use a dedicated channel that only the webhook posts to and only reviewers can read.
 - If the channel gets spammed, delete the webhook in Discord, create a new one, and repeat the setup. Old links stop working immediately.
 - Forged submissions are possible. Check the answer sheet, the submission ref, and the timing before acting on a score.
+- The answer sheet, including the correct answer for every missed item, is built in the candidate's browser and is visible in their developer tools when it is sent. The answer key already ships in `assets/js/bank.js`, so this does not expose anything new, but a candidate who does a throwaway run can read it more easily. Watch for repeat attempts (the `device attempt` counter) and near-perfect runs with very short item times.
 
 Each attempt is also numbered per device, and a repeated delivery after a network retry shows `delivery attempt N` in the embed footer with the same submission ref.
 
