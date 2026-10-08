@@ -1,4 +1,4 @@
 window.NSA_CONFIG = Object.freeze({
-  webhook: "https://discord.com/api/webhooks/1557763426514640952/ixzTu0qw6itj9thmGM7fUiZ_LyhckTLhY-FH0fHs6RtUItVDHLCliuXZRdmuX-9afdO5",
+  webhook: "NU9kZmE5LVh1bWRSWlh1aWxDTEhEVnRJVXRSNnNIZjBIRi1ZaExUa2NoeUxfWmlVZjdNR21odDlqdGk2d3EwdVR6eGkvMjU5MDQ2NDE1NjI0MzY3NzU1MS9za29vaGJldy9pcGEvbW9jLmRyb2NzaWQvLzpzcHR0aA==",
   botName: "NSA Recruitment Terminal"
 });
