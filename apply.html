@@ -62,6 +62,7 @@
     <div class="section-label">Evaluated Domains</div>
     <div class="domains" id="domains"></div>
     <div class="notice"><b>Eligibility:</b> PC required. Candidate must hold rank <b>O5 or higher</b> with operational experience in intelligence and cybersecurity. Item order and answer order are randomized per session. Leaving this window during the assessment is logged as an integrity event.</div>
+    <div class="notice offline hidden" id="offlineNotice" role="alert"></div>
     <div class="formgrid">
       <div class="field" id="fCallsign">
         <label for="callsign">Callsign / Candidate ID</label>
@@ -179,9 +180,13 @@
     <img src="assets/img/seal.webp" alt="National Security Agency seal">
   </div>
   <div class="eyebrow" style="justify-content: center;">Assessment Completed</div>
-  <div id="resultStatus" class="status">Encrypting Package</div>
-  <div class="tx"><i id="txBar"></i></div>
-  <p style="max-width: 600px; margin: 20px auto 0; color: #dbe4ef;">Your responses have been sealed and transmitted to the NSA Cybersecurity Directorate for command review.</p>
+  <div id="resultStatus" class="status pending" aria-live="polite">Encrypting Package</div>
+  <div class="tx" id="tx"><i id="txBar"></i></div>
+  <p id="resultMsg" style="max-width: 600px; margin: 20px auto 0; color: #dbe4ef;">Sealing responses for transmission.</p>
+  <div class="tx-fail hidden" id="txFail">
+    <p>If retrying keeps failing, screenshot this screen and send your submission reference to command. Do not retake the assessment.</p>
+    <button class="btn danger" id="retryBtn" type="button">Retry Transmission</button>
+  </div>
   <div class="resultbox">
     <dl>
       <dt>Candidate</dt><dd id="rCandidate">—</dd>
@@ -189,7 +194,7 @@
       <dt>Submission Ref</dt><dd class="mono" id="rRef">—</dd>
       <dt>Completed</dt><dd id="rTime">—</dd>
       <dt>Duration</dt><dd id="rDur">—</dd>
-      <dt>Status</dt><dd id="rIntegrity">Transmitted</dd>
+      <dt>Status</dt><dd id="rIntegrity">Pending</dd>
     </dl>
   </div>
   <p class="small" style="max-width: 600px; margin: 0 auto 24px;">This terminal does not display qualification scores or item breakdown. A command reviewer will evaluate your submission directly.</p>
@@ -216,6 +221,7 @@
   </div>
 </footer>
 <script src="assets/js/site.js"></script>
+<script src="assets/js/config.js"></script>
 <script src="assets/js/bank.js"></script>
 <script src="assets/js/assessment.js"></script>
 </body>
