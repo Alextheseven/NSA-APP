@@ -71,6 +71,7 @@
   </section>
 </div>
 <script src="../assets/js/site.js"></script>
+<script src="../assets/js/config.js"></script>
 <script>
 (() => {
   const RE = /^https:\/\/(?:(?:canary|ptb)\.)?discord(?:app)?\.com\/api\/(?:v\d+\/)?webhooks\/\d+\/[\w-]+\/?$/;
@@ -80,7 +81,9 @@
     const raw = $("url").value.trim();
     let u;
     try { u = new URL(raw); } catch (e) { return null; }
-    return RE.test(u.origin + u.pathname) ? u : null;
+    if (!RE.test(u.origin + u.pathname)) return null;
+    u.pathname = u.pathname.replace(/^\/api\/(?:v\d+\/)?/, "/api/v10/");
+    return u;
   };
   let line = "";
   $("encodeBtn").addEventListener("click", () => {
@@ -123,7 +126,7 @@
     } catch (e) {}
     const form = new FormData();
     form.append("payload_json", JSON.stringify({
-      username: "NSA Recruitment Terminal",
+      username: String((window.NSA_CONFIG || {}).botName || "").replace(/discord|clyde/gi, "").replace(/\s+/g, " ").trim().slice(0, 80) || "NSA Recruitment Terminal",
       allowed_mentions: { parse: [] },
       embeds: [{ title: "Submission endpoint test", description: "If you can read this, the CSD-01 assessment can deliver submissions to this channel.", color: 13871415, timestamp: new Date().toISOString() }]
     }));
