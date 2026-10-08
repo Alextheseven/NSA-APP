@@ -74,7 +74,7 @@ const probeEndpoint = async () => {
   try {
     const res = await fetchWithTimeout(endpoint.base, { method: "GET", mode: "cors", cache: "no-store" }, 8000);
     endpoint.transport = "cors";
-    if (res.status === 401 || res.status === 404) {
+    if (res.status >= 400 && res.status < 500 && res.status !== 429) {
       endpoint.status = "invalid";
       return "invalid";
     }
@@ -243,7 +243,7 @@ const updateTimer = () => {
 
 const markTime = (at) => {
   const now = at || Date.now();
-  if (state.viewing !== null) state.itemTime[state.viewing] += now - state.enteredAt;
+  if (state.viewing !== null && !state.away) state.itemTime[state.viewing] += now - state.enteredAt;
   state.enteredAt = now;
 };
 
@@ -614,7 +614,7 @@ const setDelivery = (mode, detail) => {
     st.textContent = "Response Transmitted";
     $("txBar").style.width = "100%";
     $("resultMsg").textContent = "Your responses have been sealed and transmitted to the NSA Cybersecurity Directorate for command review.";
-    $("rIntegrity").textContent = (detail ? "Delivered (confirmed)" : "Transmitted") + (state.report.reason === "Time Expired" ? " • window expired" : "");
+    $("rIntegrity").textContent = (detail ? "Delivered (confirmed)" : "Transmitted (unconfirmed)") + (state.report.reason === "Time Expired" ? " • window expired" : "");
     fail.classList.add("hidden");
     $("statusChip").textContent = "PACKAGE SEALED";
   } else {
@@ -672,13 +672,16 @@ const finish = async (reason) => {
 
 const openAway = () => {
   if (!state.running || state.away) return;
+  markTime();
   state.away = { at: Date.now() - state.startedAt, since: Date.now() };
 };
 
 const closeAway = (at) => {
   if (!state.away) return;
-  const ev = { at: state.away.at, dur: Math.max(0, (typeof at === "number" ? at : Date.now()) - state.away.since) };
+  const back = typeof at === "number" ? at : Date.now();
+  const ev = { at: state.away.at, dur: Math.max(0, back - state.away.since) };
   state.away = null;
+  state.enteredAt = back;
   state.focusEvents.push(ev);
   const fc = $("focusCount");
   fc.textContent = state.focusEvents.length;

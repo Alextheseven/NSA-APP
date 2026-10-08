@@ -46,6 +46,10 @@ The webhook has to ship to every candidate's browser to work, so anyone determin
 
 Each attempt is also numbered per device, and a repeated delivery after a network retry shows `delivery attempt N` in the embed footer with the same submission ref.
 
+To keep the webhook out of the browser entirely, put a small relay (for example a Cloudflare Worker) in front of Discord. It holds the real webhook URL, forwards the request body unchanged, and returns Discord's status with CORS headers. Set `webhook` in `config.js` to the relay's `https://` URL. The site sends Discord's multipart format: a `payload_json` field and the answer sheet as `files[0]`.
+
+When the browser can't read Discord's reply, the result screen says **Transmitted (unconfirmed)**. The message was sent, but the page can't tell whether Discord accepted it.
+
 If a submission can't be delivered, the candidate sees **Transmission Failed** with a retry button and is told to send their submission ref to command.
 
 ## Editing the assessment
