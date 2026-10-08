@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en" class="no-js">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CSD-01 Assessment | National Security Agency</title>
+<meta name="description" content="CSD-01 Cyber Operations and Signals Security Assessment for the NSA Cybersecurity Directorate. Roblox milsim roleplay.">
+<meta name="theme-color" content="#04070c">
+<meta property="og:title" content="CSD-01 Assessment | National Security Agency">
+<meta property="og:description" content="Elite personnel screening for the NSA Cybersecurity Directorate. Roblox milsim roleplay.">
+<meta property="og:image" content="assets/img/og.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="robots" content="noindex">
+<link rel="icon" type="image/png" href="assets/img/favicon.png">
+<link rel="apple-touch-icon" href="assets/img/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700;800&family=Cinzel:wght@600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/site.css">
+</head>
+<body>
+<div class="classbar">CLASSIFIED // NSA-CSD // ASSESSMENT MATERIAL</div>
+<header class="site-header">
+  <div class="inner">
+    <a class="brand" href="./">
+      <img src="assets/img/seal.webp" alt="National Security Agency seal" width="44" height="44">
+      <div>
+        <strong>NATIONAL SECURITY AGENCY</strong>
+        <span>CYBERSECURITY DIRECTORATE</span>
+      </div>
+    </a>
+    <div class="nav-cta">
+      <span class="chip" id="clockChip">00:00:00Z</span>
+      <span class="chip live" id="statusChip">SECURE LINK</span>
+    </div>
+  </div>
+</header>
+<div class="wrap">
+<section id="gate" class="panel hero">
+  <div class="hero-media">
+    <div class="seal-wrap">
+      <svg viewBox="0 0 200 200" aria-hidden="true">
+        <circle class="ring-a" cx="100" cy="100" r="96" fill="none" stroke="#d4a937" stroke-opacity="0.55" stroke-width="1" stroke-dasharray="2 6"/>
+        <circle class="ring-b" cx="100" cy="100" r="89" fill="none" stroke="#f2cf63" stroke-opacity="0.35" stroke-width="2" stroke-dasharray="40 14 6 14"/>
+      </svg>
+      <img src="assets/img/seal.webp" alt="National Security Agency seal">
+    </div>
+    <div>
+      <div class="eyebrow">Elite Personnel Screening / CSD-01</div>
+      <h1>Cyber Operations &amp;<br><em>Signals Security</em> Assessment</h1>
+      <p>Senior-level evaluation across identity compromise, applied cryptography, digital forensics, network defense, cloud intrusion, exploitation mitigation, intelligence tradecraft, and command judgment.</p>
+    </div>
+    <span class="corner tl"></span><span class="corner tr"></span>
+  </div>
+  <div class="hero-body">
+    <div class="grid">
+      <div class="stat"><b id="statQ">00</b><span>Scenario items</span></div>
+      <div class="stat"><b id="statT">00 min</b><span>Assessment window</span></div>
+      <div class="stat"><b>80%</b><span>Qualification bar</span></div>
+      <div class="stat"><b>2</b><span>Difficulty tiers</span></div>
+    </div>
+    <div class="section-label">Evaluated Domains</div>
+    <div class="domains" id="domains"></div>
+    <div class="notice"><b>Eligibility:</b> PC required. Candidate must hold rank <b>O5 or higher</b> with operational experience in intelligence and cybersecurity. Item order and answer order are randomized per session. Leaving this window during the assessment is logged as an integrity event.</div>
+    <div class="formgrid">
+      <div class="field" id="fCallsign">
+        <label for="callsign">Callsign / Candidate ID</label>
+        <input id="callsign" type="text" maxlength="40" placeholder="Enter identifier" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field" id="fRank">
+        <label for="rank">Current Rank</label>
+        <select id="rank">
+          <option value="">Select rank</option>
+          <option>O5</option>
+          <option>O6</option>
+          <option>O7</option>
+          <option>O8</option>
+          <option>O9</option>
+          <option>O10</option>
+        </select>
+      </div>
+    </div>
+    <div class="checks">
+      <label class="checkbox-label" id="lPc"><input id="pc" type="checkbox"><span>I confirm I am completing this assessment on a PC workstation.</span></label>
+      <label class="checkbox-label" id="lAck"><input id="ack" type="checkbox"><span>I will complete this assessment without outside assistance and understand that window focus loss is recorded.</span></label>
+    </div>
+    <button class="btn primary lg" id="startBtn" type="button">Initialize Assessment</button>
+    <p class="small" style="margin-top: 16px;">No answer explanations or scores are displayed. Responses are transmitted for command review.</p>
+  </div>
+</section>
+
+<section id="boot" class="panel boot hidden" aria-live="polite"></section>
+
+<section id="test" class="hidden">
+  <div class="exam">
+    <div class="panel qcard">
+      <span class="corner tl"></span><span class="corner br"></span>
+      <div class="qhead">
+        <div>
+          <div class="eyebrow">Live Evaluation</div>
+          <h2 id="sectionTitle">Domain</h2>
+          <div class="tags"><span class="tag" id="tier">Tier</span><span class="tag" id="candidateMeta"></span></div>
+        </div>
+        <div class="qnum"><b id="qnumCur">01</b><span id="qnumTot">/ 00</span></div>
+      </div>
+      <div class="progress"><i id="bar"></i></div>
+      <div id="question"></div>
+      <div class="footerrow">
+        <div class="grp">
+          <button class="btn ghost" id="prevBtn" type="button">&larr; Previous</button>
+          <button class="btn ghost" id="flagBtn" type="button">Flag for Review</button>
+        </div>
+        <button class="btn primary" id="nextBtn" type="button">Continue &rarr;</button>
+      </div>
+      <div class="hints">
+        <span><kbd>1</kbd>–<kbd>4</kbd> select</span>
+        <span><kbd>&larr;</kbd><kbd>&rarr;</kbd> navigate</span>
+        <span><kbd>F</kbd> flag</span>
+        <span><kbd>Enter</kbd> continue</span>
+      </div>
+    </div>
+    <aside class="side">
+      <div class="panel">
+        <div class="clock" id="clock">
+          <svg viewBox="0 0 100 100" aria-hidden="true">
+            <circle class="trk" cx="50" cy="50" r="44" fill="none" stroke-width="7"/>
+            <circle class="arc" id="arc" cx="50" cy="50" r="44" fill="none" stroke-width="7" stroke-dasharray="276.46" stroke-dashoffset="0"/>
+          </svg>
+          <div><span>TIME REMAINING</span><b id="timer">00:00</b></div>
+        </div>
+        <div class="kpis">
+          <div><b id="kAns">0</b><span>Answered</span></div>
+          <div><b id="kFlag">0</b><span>Flagged</span></div>
+          <div><b id="kLeft">0</b><span>Open</span></div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="section-label">Item Navigator</div>
+        <div class="nav" id="nav"></div>
+        <div class="legend">
+          <span><i style="background: rgba(212,169,55,0.5)"></i>Answered</span>
+          <span><i style="background: var(--amber); border-radius: 50%"></i>Flagged</span>
+          <span><i style="outline: 2px solid var(--blue)"></i>Current</span>
+        </div>
+        <div style="margin-top: 16px;"><button class="btn danger" id="reviewBtn" type="button" style="width: 100%">Review &amp; Submit</button></div>
+      </div>
+      <div class="panel">
+        <div class="integrity"><span>FOCUS EVENTS</span><b id="focusCount">0</b></div>
+      </div>
+    </aside>
+  </div>
+</section>
+
+<section id="review" class="panel review hidden">
+  <span class="corner tl"></span><span class="corner br"></span>
+  <div class="eyebrow">Pre-Transmission Review</div>
+  <h2>Confirm Submission</h2>
+  <p style="margin-top: 10px;">Once transmitted, responses are sealed and cannot be modified. Select any item below to return to it.</p>
+  <div class="review-grid">
+    <div class="stat"><b id="rvAns">0</b><span>Answered</span></div>
+    <div class="stat"><b id="rvOpen">0</b><span>Unanswered</span></div>
+    <div class="stat"><b id="rvFlag">0</b><span>Flagged</span></div>
+  </div>
+  <div id="rvOpenWrap"><div class="section-label">Unanswered Items</div><div class="review-list red" id="rvOpenList"></div></div>
+  <div id="rvFlagWrap" style="margin-top: 18px;"><div class="section-label">Flagged Items</div><div class="review-list amber" id="rvFlagList"></div></div>
+  <div class="footerrow">
+    <button class="btn ghost" id="backBtn" type="button">&larr; Return to Assessment</button>
+    <button class="btn primary" id="submitBtn" type="button">Transmit Responses</button>
+  </div>
+</section>
+
+<section id="result" class="panel result hidden">
+  <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+  <div class="seal-wrap">
+    <svg viewBox="0 0 200 200" aria-hidden="true">
+      <circle class="ring-a" cx="100" cy="100" r="96" fill="none" stroke="#2fe38f" stroke-opacity="0.5" stroke-width="1" stroke-dasharray="2 6"/>
+      <circle class="ring-b" cx="100" cy="100" r="89" fill="none" stroke="#d4a937" stroke-opacity="0.4" stroke-width="2" stroke-dasharray="40 14 6 14"/>
+    </svg>
+    <img src="assets/img/seal.webp" alt="National Security Agency seal">
+  </div>
+  <div class="eyebrow" style="justify-content: center;">Assessment Completed</div>
+  <div id="resultStatus" class="status">Encrypting Package</div>
+  <div class="tx"><i id="txBar"></i></div>
+  <p style="max-width: 600px; margin: 20px auto 0; color: #dbe4ef;">Your responses have been sealed and transmitted to the NSA Cybersecurity Directorate for command review.</p>
+  <div class="resultbox">
+    <dl>
+      <dt>Candidate</dt><dd id="rCandidate">—</dd>
+      <dt>Rank</dt><dd id="rRank">—</dd>
+      <dt>Submission Ref</dt><dd class="mono" id="rRef">—</dd>
+      <dt>Completed</dt><dd id="rTime">—</dd>
+      <dt>Duration</dt><dd id="rDur">—</dd>
+      <dt>Status</dt><dd id="rIntegrity">Transmitted</dd>
+    </dl>
+  </div>
+  <p class="small" style="max-width: 600px; margin: 0 auto 24px;">This terminal does not display qualification scores or item breakdown. A command reviewer will evaluate your submission directly.</p>
+  <button class="btn" type="button" onclick="location.reload()">Return to Terminal</button>
+</section>
+
+</div>
+<div class="toast" id="toast"></div>
+<footer class="site-footer" style="margin-top: 20px;">
+  <div class="inner">
+    <a class="brand" href="./">
+      <img src="assets/img/seal.webp" alt="" width="44" height="44">
+      <div>
+        <strong>NATIONAL SECURITY AGENCY</strong>
+        <span>CYBERSECURITY DIRECTORATE</span>
+      </div>
+    </a>
+    <div class="links">
+      <a href="./">Home</a>
+      <a href="./#selection">Selection</a>
+      <a href="./#requirements">Requirements</a>
+    </div>
+    <div class="disc">Roblox milsim roleplay group. Not affiliated with or endorsed by the U.S. Government, the National Security Agency, or the Department of Defense.</div>
+  </div>
+</footer>
+<script src="assets/js/site.js"></script>
+<script src="assets/js/bank.js"></script>
+<script src="assets/js/assessment.js"></script>
+</body>
+</html>

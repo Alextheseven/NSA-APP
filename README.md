@@ -1,94 +1,45 @@
-# DEDHEC Panel
+# NSA Cybersecurity Directorate — Recruitment Site
 
-A rebuilt server administration panel for Roblox. Same layout as the original DEDHEC panel (player list on the left, Ban / Kick / Scare / More on the right, Terminate Game at the bottom) with a modern, readable design and every action validated on the server.
+Recruitment website and CSD-01 assessment for the National Security Agency division of a Roblox milsim roleplay group. Not affiliated with the U.S. Government.
 
-## What changed from the original
-
-| Original | Rebuilt |
+| Page | Purpose |
 | --- | --- |
-| Blue text on solid red buttons | Dark theme with tinted icon tiles, readable contrast, hover and press feedback |
-| Static `PlayerName` placeholder | Live player list with avatars, display names, `@usernames`, search and a `YOU` tag |
-| No selected-player info | Target card with avatar, user ID, account age and status chips (`FROZEN`, `WATCHING`) |
-| `More` did nothing | `More` slides to a second page: Kill, Freeze, Bring, Go to, Respawn, Spectate |
-| Ban and Kick fire instantly | Confirmation dialog with an optional reason (filtered) and ban duration (1 hour, 1 day, 7 days, permanent) |
-| Terminate Game is one click | Hold-to-confirm button with a progress fill, so it can't be triggered by accident |
-| Fixed size | Scales to any screen, draggable header, open and close animations, toast notifications |
-| Client-side only | Server checks admin access, rate-limits requests, validates every argument and protects other admins |
+| `index.html` | Landing page: mission, divisions, selection pipeline, requirements, FAQ |
+| `apply.html` | CSD-01 assessment: 43 randomized items, 50 minute timer, item navigator, flagging, review screen |
 
-## Install
+## Hosting on GitHub Pages
 
-### Option A: drop-in place file
+1. Merge this branch into the repository's default branch.
+2. Open **Settings → Pages** in the repository.
+3. Under **Build and deployment**, set **Source** to **Deploy from a branch**.
+4. Pick the default branch and the `/ (root)` folder, then click **Save**.
+5. After a minute the site is live at `https://<username>.github.io/<repository>/`.
 
-1. Open `DedhecPanel.rbxl` in Roblox Studio.
-2. Copy these three items into the same locations in your game:
-   - `ReplicatedStorage > DedhecPanel`
-   - `ServerScriptService > DedhecPanelServer`
-   - `StarterPlayer > StarterPlayerScripts > DedhecPanelClient`
+GitHub Pages on a free account requires the repository to be public.
 
-### Option B: Rojo
+## Receiving submissions
 
-```sh
-rojo serve default.project.json
-```
+Submissions are posted as a Discord-style embed to the URL in `WEBHOOK_URL` at the top of `assets/js/assessment.js`. It is empty by default, so nothing is sent.
 
-## Usage
+Anything in this repository is public once Pages is on. A Discord webhook URL pasted directly into `assessment.js` can be copied by anyone and used to spam or delete the webhook. Put a small relay (for example a Cloudflare Worker) between the site and Discord, and set `WEBHOOK_URL` to the relay's URL instead.
 
-- Press **F2** or click the red **D** button on the left edge of the screen to open the panel.
-- Pick a player from the list, then choose an action.
-- Ban and Kick open a dialog. Press Enter or **Ban player** / **Kick player** to confirm.
-- **Terminate Game** must be held for 1.5 seconds. It kicks everyone and locks the server.
-- Drag the panel by its header.
+Each submission includes callsign, rank, score, pass/fail, answered count, duration, focus-loss count, end condition, and a per-domain breakdown.
 
-## Who gets access
+## Editing the assessment
 
-Edit `ServerScriptService > DedhecPanelServer > Settings`:
+Questions, time limit, and pass mark live in `assets/js/bank.js`. The answer key in that file is encoded against the current option order, so changing a question's options or adding questions requires regenerating the `key` and `salt` values.
 
-| Setting | Default | Meaning |
-| --- | --- | --- |
-| `AdminUserIds` | `{}` | User IDs that always get the panel, for example `{ 12345678, 87654321 }` |
-| `AdminGroups` | `{}` | Group rank rules, for example `{ { GroupId = 1234567, MinimumRank = 200 } }` |
-| `CreatorHasAccess` | `true` | The experience owner (or group owner rank) gets access |
-| `CreatorGroupMinimumRank` | `255` | Minimum rank in the owning group when the game is group-owned |
-| `StudioGrantsAccess` | `true` | Everyone is an admin during Studio play tests |
-| `AllowTerminate` | `true` | Set to `false` to remove Terminate Game entirely |
-| `LogActions` | `true` | Prints every action to the server output |
+The key is obfuscated, not secret: a determined candidate can read it from the browser. Command review of the score, timing, and focus-loss log is the real control.
 
-Players who aren't admins never get the panel UI, and the server rejects their requests even if they send them manually. Admins can't ban, kick, kill or freeze other admins.
-
-## Client options
-
-Edit `ReplicatedStorage > DedhecPanel > Config`:
-
-| Setting | Default | Meaning |
-| --- | --- | --- |
-| `ToggleKey` | `Enum.KeyCode.F2` | Keyboard shortcut that opens and closes the panel |
-| `ShowLauncher` | `true` | Shows the small **D** button for mouse and mobile users |
-| `TerminateHoldSeconds` | `1.5` | How long Terminate Game must be held |
-| `Scare.Text` | `"I SEE YOU"` | Text shown in the jumpscare |
-| `Scare.SoundId` | `""` | Optional sound, for example `"rbxassetid://1234567890"` |
-| `Scare.ImageId` | `""` | Optional full-screen image, for example `"rbxassetid://1234567890"` |
-| `Scare.Duration` | `2.2` | Seconds the jumpscare lasts |
-
-## Bans
-
-Bans use `Players:BanAsync`, so they apply across every server of the experience and Roblox also tries to block the player's alt accounts. Enable it in Studio by selecting **Players** in the Explorer and turning on **BanningEnabled**, then publish. If the Ban API call fails (for example because banning isn't enabled), the panel still kicks the player, bans them from the current server, and shows a warning telling you the ban is server-only.
-
-## Project layout
+## Structure
 
 ```
-src/
-  shared/      ReplicatedStorage.DedhecPanel
-    Protocol   action rules, limits and ban durations shared by client and server
-    Config     client options
-  server/      ServerScriptService.DedhecPanelServer
-    Settings   admin access and messages
-  client/      StarterPlayerScripts.DedhecPanelClient
-    Panel      window, target card, actions, terminate button
-    PlayerList player list and search
-    Dialog     ban and kick confirmation
-    Toasts     notifications
-    Scare      jumpscare effect
-    Components tiles, icon buttons and chips
-    Theme      colors, fonts, motion and layout
-    Ui         instance helpers
+index.html
+apply.html
+assets/
+  css/site.css
+  js/site.js
+  js/bank.js
+  js/assessment.js
+  img/seal.webp, hero.webp, og.jpg, favicon.png, apple-touch-icon.png
 ```
