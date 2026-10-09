@@ -1,21 +1,25 @@
 (() => {
-const CFG = window.NSA_ASSESSMENT;
 const SITE = window.NSA_CONFIG || {};
-const BANK = CFG.items;
-const KEY_B64 = CFG.key;
-const SALT_B64 = CFG.salt;
-const DURATION = CFG.duration;
-const PASS_MARK = CFG.passMark;
-const CODE = CFG.code || "CSD-01";
 const ARC_LEN = 276.46;
-const DISCORD_RE = /^https:\/\/(?:(?:canary|ptb)\.)?discord(?:app)?\.com\/api\/(?:v\d+\/)?webhooks\/\d+\/[\w-]+\/?$/;
 const ATTEMPT_KEY = "nsa-csd01-attempts";
 const MAX_SEND_TRIES = 4;
+const TURNSTILE_SRC = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
 
 const $ = id => document.getElementById(id);
 const pad = n => String(n).padStart(2, "0");
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+let BANK = [];
+let DURATION = 3000;
+let CODE = "CSD-01";
 const state = {
+  link: "checking",
+  turnstile: false,
+  tsWidget: null,
+  tsToken: null,
+  starting: false,
+  fp: "",
+  session: null,
+  ref: "",
   running: false,
   order: [],
   optOrder: [],
@@ -32,28 +36,18 @@ const state = {
   focusEvents: [],
   attempt: 1,
   delivery: "idle",
-  sendTry: 0,
-  report: null
+  submission: null
 };
 
-const resolveWebhook = raw => {
-  const v = String(raw || "").trim();
-  if (!v) return null;
-  let url = v;
-  if (!/^https?:\/\//i.test(v)) {
-    try { url = atob(v.replace(/\s+/g, "")).split("").reverse().join(""); } catch (e) { return null; }
-  }
+const relayBase = (() => {
+  const raw = String(SITE.relay || "").trim();
+  if (!raw) return null;
   let u;
-  try { u = new URL(url); } catch (e) { return null; }
-  if (u.protocol !== "https:") return null;
-  const discord = DISCORD_RE.test(u.origin + u.pathname);
-  if (discord) u.pathname = u.pathname.replace(/^\/api\/(?:v\d+\/)?/, "/api/v10/");
-  const post = new URL(u.href);
-  if (discord) post.searchParams.set("wait", "true");
-  return { base: u.href, post: post.href, discord, transport: discord ? "no-cors" : "cors", status: "unchecked" };
-};
-
-const endpoint = resolveWebhook(SITE.webhook);
+  try { u = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : "https://" + raw); } catch (e) { return undefined; }
+  const local = u.hostname === "localhost" || u.hostname === "127.0.0.1";
+  if (u.protocol !== "https:" && !(local && u.protocol === "http:")) return undefined;
+  return u.origin + u.pathname.replace(/\/+$/, "");
+})();
 
 const fetchWithTimeout = async (url, opts, ms) => {
   const ctl = new AbortController();
@@ -65,33 +59,29 @@ const fetchWithTimeout = async (url, opts, ms) => {
   }
 };
 
-const probeEndpoint = async () => {
-  if (!endpoint) return "missing";
-  if (!endpoint.discord) {
-    endpoint.status = "ok";
-    return "ok";
-  }
+const api = async (path, body, ms) => {
   try {
-    const res = await fetchWithTimeout(endpoint.base, { method: "GET", mode: "cors", cache: "no-store" }, 8000);
-    endpoint.transport = "cors";
-    if (res.status >= 400 && res.status < 500 && res.status !== 429) {
-      endpoint.status = "invalid";
-      return "invalid";
-    }
-    endpoint.status = "ok";
-    return "ok";
+    const res = await fetchWithTimeout(relayBase + path, body === undefined
+      ? { method: "GET", mode: "cors", cache: "no-store" }
+      : { method: "POST", mode: "cors", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }, ms || 20000);
+    let data = null;
+    try { data = await res.json(); } catch (e) {}
+    return { ok: res.ok && Boolean(data && data.ok), status: res.status, data: data || {} };
   } catch (e) {
-    endpoint.transport = "no-cors";
-    endpoint.status = "unverified";
-    return "unverified";
+    return { ok: false, status: "network", data: {} };
   }
 };
 
-const probe = probeEndpoint();
-
-const recheck = async first => first === "unverified" ? probeEndpoint() : first;
+const toast = (msg) => {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(toast.h);
+  toast.h = setTimeout(() => t.classList.remove("show"), 3200);
+};
 
 const setOffline = msg => {
+  state.link = "offline";
   const n = $("offlineNotice");
   n.textContent = msg;
   n.classList.remove("hidden");
@@ -101,27 +91,135 @@ const setOffline = msg => {
   chip.classList.add("off");
 };
 
-probe.then(s => {
-  if (s === "missing") setOffline("Submissions are offline: no transmission endpoint is configured. Contact command before attempting the assessment.");
-  else if (s === "invalid") setOffline("Submissions are offline: the transmission endpoint was rejected. Contact command before attempting the assessment.");
+const setOnline = () => {
+  state.link = "ok";
+  $("offlineNotice").classList.add("hidden");
+  $("startBtn").disabled = false;
+  const chip = $("statusChip");
+  chip.textContent = "SECURE LINK";
+  chip.classList.remove("off");
+};
+
+const loadBank = async () => {
+  const res = await fetch("assets/data/bank.json", { cache: "no-cache" });
+  if (!res.ok) throw new Error("bank " + res.status);
+  const d = await res.json();
+  if (!d || !Array.isArray(d.items) || !d.items.length) throw new Error("bank shape");
+  BANK = d.items;
+  state.fp = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(d.items)))), b => b.toString(16).padStart(2, "0")).join("").slice(0, 12);
+  DURATION = Number(d.duration) || DURATION;
+  CODE = d.code || CODE;
+  const domainSet = [...new Set(BANK.map(q => q.t))];
+  $("statQ").textContent = BANK.length;
+  $("statT").textContent = Math.round(DURATION / 60) + " min";
+  $("statP").textContent = (Number(d.passMark) || 80) + "%";
+  $("qnumTot").textContent = "/ " + pad(BANK.length);
+  $("domains").replaceChildren(...domainSet.map(t => {
+    const s = document.createElement("span");
+    s.textContent = t;
+    return s;
+  }));
+};
+
+const loadTurnstile = () => new Promise((resolve, reject) => {
+  if (window.turnstile) return resolve(window.turnstile);
+  const s = document.createElement("script");
+  s.src = TURNSTILE_SRC;
+  s.async = true;
+  s.onload = () => window.turnstile ? resolve(window.turnstile) : reject(new Error("turnstile"));
+  s.onerror = () => reject(new Error("turnstile"));
+  document.head.appendChild(s);
 });
 
-const domainSet = [...new Set(BANK.map(q => q.t))];
-$("statQ").textContent = BANK.length;
-$("statT").textContent = Math.round(DURATION / 60) + " min";
-$("qnumTot").textContent = "/ " + pad(BANK.length);
-$("domains").replaceChildren(...domainSet.map(d => {
-  const s = document.createElement("span");
-  s.textContent = d;
-  return s;
-}));
+const resetTurnstile = () => {
+  state.tsToken = null;
+  if (state.tsWidget !== null && window.turnstile) {
+    try { window.turnstile.reset(state.tsWidget); } catch (e) {}
+  }
+};
 
-const toast = (msg) => {
-  const t = $("toast");
-  t.textContent = msg;
-  t.classList.add("show");
-  clearTimeout(toast.h);
-  toast.h = setTimeout(() => t.classList.remove("show"), 2600);
+const mountTurnstile = async () => {
+  const key = String(SITE.turnstileSiteKey || "").trim();
+  if (!key) throw new Error("sitekey");
+  const ts = await loadTurnstile();
+  const box = $("turnstileBox");
+  box.classList.remove("hidden");
+  state.tsWidget = ts.render(box, {
+    sitekey: key,
+    theme: "dark",
+    action: "start",
+    callback: token => { state.tsToken = token; },
+    "expired-callback": () => { state.tsToken = null; },
+    "error-callback": code => {
+      state.tsToken = null;
+      if (/^(1101|1102|1104|4000)/.test(String(code))) {
+        setOffline("Submissions are offline: the security check is misconfigured for this site (" + code + "). Contact command before attempting the assessment.");
+        return true;
+      }
+      return false;
+    }
+  });
+};
+
+const OFFLINE_REASONS = {
+  webhook: "the Discord webhook is missing or invalid on the relay",
+  webhook_dead: "Discord reports the webhook was deleted",
+  turnstile: "the Turnstile secret is missing on the relay",
+  turnstile_secret: "the Turnstile secret on the relay is wrong",
+  answer_key: "the answer key does not match the current questions",
+  bank: "the relay cannot load the questions",
+  site_url: "SITE_URL is missing on the relay",
+  allowed_origin: "ALLOWED_ORIGIN is missing on the relay"
+};
+
+const offlineText = code => "Submissions are offline: " + (OFFLINE_REASONS[code] || "the submission relay is not fully configured") + (code ? " (" + code + ")" : "") + ". Contact command before attempting the assessment.";
+const REFRESH_TEXT = "The assessment was just updated. Wait a minute, then hard-refresh this page (Ctrl+Shift+R).";
+
+const checkLink = async () => {
+  if (relayBase === null) {
+    setOffline("Submissions are offline: no submission relay is configured. Contact command before attempting the assessment.");
+    return;
+  }
+  if (relayBase === undefined) {
+    setOffline("Submissions are offline: the relay address in config.js is not a valid https:// URL. Contact command before attempting the assessment.");
+    return;
+  }
+  const h = await api("/health", undefined, 15000);
+  if (!h.ok) {
+    setOffline(h.status === "network" || h.status === 403
+      ? "Submissions are offline: the submission relay could not be reached from this site. Contact command before attempting the assessment."
+      : offlineText(h.data.error || "HTTP " + h.status));
+    return;
+  }
+  if (h.data.fp && h.data.fp !== state.fp) {
+    setOffline(REFRESH_TEXT);
+    return;
+  }
+  state.turnstile = Boolean(h.data.turnstile);
+  if (state.turnstile && !String(SITE.turnstileSiteKey || "").trim()) {
+    setOffline("Submissions are offline: the security check is not configured on this site (missing Turnstile site key). Contact command before attempting the assessment.");
+    return;
+  }
+  if (state.turnstile) {
+    try {
+      await mountTurnstile();
+    } catch (e) {
+      setOffline("Submissions are offline: the security check could not load. Disable content blockers for this site or contact command.");
+      return;
+    }
+  }
+  setOnline();
+};
+
+const init = async () => {
+  $("startBtn").disabled = true;
+  try {
+    await loadBank();
+  } catch (e) {
+    setOffline("The assessment could not load. Refresh the page or contact command.");
+    return;
+  }
+  await checkLink();
 };
 
 const rand = n => {
@@ -143,7 +241,7 @@ const show = id => {
   window.scrollTo({ top: 0, behavior: "smooth" });
 };
 
-const cleanCallsign = () => $("callsign").value.replace(/[\p{Cf}\u2800\u3164\uFFA0]/gu, "").replace(/\s+/g, " ").trim();
+const cleanCallsign = () => $("callsign").value.replace(/[\p{Cf}⠀ㅤﾠ]/gu, "").replace(/\s+/g, " ").trim();
 
 const validate = () => {
   const cs = /[\p{L}\p{N}]/u.test(cleanCallsign()) ? cleanCallsign() : "";
@@ -164,7 +262,7 @@ const boot = () => new Promise(resolve => {
     ["ok", "  [OK] TLS 1.3 / X25519MLKEM768 negotiated"],
     ["", "> Verifying candidate credentials ......... "],
     ["ok", "  [OK] " + cleanCallsign().toUpperCase() + " / " + $("rank").value + " cleared for " + CODE],
-    ["", "> Randomizing item bank (" + BANK.length + " items, " + domainSet.length + " domains)"],
+    ["", "> Randomizing item bank (" + BANK.length + " items, " + new Set(BANK.map(q => q.t)).size + " domains)"],
     ["ok", "  [OK] Item and option order sealed"],
     ["", "> Arming integrity monitor ................ "],
     ["ok", "  [OK] Focus telemetry active"],
@@ -195,21 +293,44 @@ const bumpAttempt = () => {
   }
 };
 
+const startError = res => {
+  const e = res.data.error;
+  if (e === "turnstile") return "SECURITY CHECK FAILED: TRY AGAIN";
+  if (e === "turnstile_unavailable") return "SECURITY CHECK UNAVAILABLE: TRY AGAIN SHORTLY";
+  if (e === "rate") return "TOO MANY ATTEMPTS: WAIT A FEW MINUTES";
+  if (e === "callsign" || e === "rank") return "INVALID CALLSIGN OR RANK";
+  if (res.status === "network") return "RELAY UNREACHABLE: CHECK YOUR CONNECTION";
+  return "SUBMISSIONS OFFLINE: CONTACT COMMAND";
+};
+
 const start = async () => {
-  if (state.running || $("startBtn").disabled) return;
+  if (state.running || state.starting || state.link !== "ok") return;
   if (!validate()) {
     toast("ELIGIBILITY CONFIRMATION REQUIRED");
     return;
   }
-  $("startBtn").disabled = true;
-  show("boot");
-  const [, first] = await Promise.all([boot(), probe]);
-  const link = await recheck(first);
-  if (link === "missing" || link === "invalid") {
-    show("gate");
-    toast("SUBMISSIONS OFFLINE: CONTACT COMMAND");
+  if (state.turnstile && !state.tsToken) {
+    toast("COMPLETE THE SECURITY CHECK FIRST");
     return;
   }
+  state.starting = true;
+  $("startBtn").disabled = true;
+  const token = state.tsToken;
+  const pending = api("/start", { callsign: cleanCallsign(), rank: $("rank").value, turnstile: token, fp: state.fp });
+  show("boot");
+  const [, res] = await Promise.all([boot(), pending]);
+  if (state.turnstile) resetTurnstile();
+  if (!res.ok) {
+    state.starting = false;
+    show("gate");
+    if (res.data.error === "offline") setOffline(offlineText(res.data.reason));
+    else if (res.data.error === "bank_changed") setOffline(REFRESH_TEXT);
+    else $("startBtn").disabled = false;
+    toast(startError(res));
+    return;
+  }
+  state.session = res.data.session;
+  state.ref = typeof res.data.ref === "string" ? res.data.ref : "";
   state.order = shuffle(BANK.map((_, i) => i));
   state.optOrder = BANK.map(q => shuffle(q.a.map((_, i) => i)));
   state.answers = Array(BANK.length).fill(null);
@@ -222,6 +343,7 @@ const start = async () => {
   state.attempt = bumpAttempt();
   state.startedAt = Date.now();
   state.endAt = state.startedAt + DURATION * 1000;
+  state.starting = false;
   state.running = true;
   if (document.visibilityState === "hidden" || !document.hasFocus()) openAway();
   $("candidateMeta").textContent = cleanCallsign() + " • " + $("rank").value;
@@ -370,224 +492,35 @@ const openReview = () => {
   show("review");
 };
 
-const decodeKey = () => {
-  const k = Uint8Array.from(atob(KEY_B64), c => c.charCodeAt(0));
-  const s = Uint8Array.from(atob(SALT_B64), c => c.charCodeAt(0));
-  return Array.from(k, (v, i) => v ^ s[i % s.length]);
-};
-
-const makeRef = async (seed) => {
-  const data = new TextEncoder().encode(seed);
-  const buf = await crypto.subtle.digest("SHA-256", data);
-  const hex = Array.from(new Uint8Array(buf), b => b.toString(16).padStart(2, "0")).join("").toUpperCase();
-  return "CSD-" + hex.slice(0, 4) + "-" + hex.slice(4, 8) + "-" + hex.slice(8, 12);
-};
-
 const fmtDur = ms => {
   const s = Math.max(0, Math.round(ms / 1000));
   return Math.floor(s / 60) + "m " + pad(s % 60) + "s";
 };
 
-const fmtClock = ms => {
-  const s = Math.max(0, Math.floor(ms / 1000));
-  return pad(Math.floor(s / 60)) + ":" + pad(s % 60);
+const failText = res => {
+  const e = res.data.error;
+  if (e === "expired") return "session expired";
+  if (e === "session") return "session rejected";
+  if (e === "payload") return "submission rejected";
+  if (e === "bank_changed") return "assessment changed during your attempt";
+  if (e === "discord") return "Discord rejected delivery";
+  if (e === "busy") return "relay busy";
+  if (e === "offline") return "relay offline";
+  if (res.status === "network") return "network error";
+  return "HTTP " + res.status;
 };
 
-const mdEscape = s => String(s).replace(/[\\`*_~|<>#:\[\]()]/g, "\\$&");
-const fileSafe = s => String(s).replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 24) || "candidate";
-const letter = (qi, oi) => String.fromCharCode(65 + state.optOrder[qi].indexOf(oi));
-
-const grade = (reason, finishedAt) => {
-  const key = decodeKey();
-  const domains = new Map();
-  let correct = 0;
-  BANK.forEach((q, i) => {
-    const ok = state.answers[i] === key[i];
-    if (ok) correct++;
-    const d = domains.get(q.t) || { c: 0, t: 0 };
-    d.t++;
-    if (ok) d.c++;
-    domains.set(q.t, d);
-  });
-  const answered = state.answers.filter(a => a !== null).length;
-  const score = Math.round(correct / BANK.length * 100);
-  const awayMs = state.focusEvents.reduce((a, e) => a + (e.dur || 0), 0);
-  const items = state.order.map((qi, pos) => {
-    const ans = state.answers[qi];
-    return {
-      pos: pos + 1,
-      qi,
-      q: BANK[qi],
-      ans,
-      key: key[qi],
-      result: ans === null ? "UNANSWERED" : ans === key[qi] ? "CORRECT" : "INCORRECT",
-      flagged: state.flags[qi],
-      time: state.itemTime[qi]
-    };
-  });
-  return {
-    callsign: cleanCallsign(),
-    rank: $("rank").value,
-    reason,
-    startedAt: state.startedAt,
-    finishedAt,
-    duration: finishedAt - state.startedAt,
-    correct,
-    answered,
-    score,
-    qualified: score >= PASS_MARK,
-    flagged: state.flags.filter(Boolean).length,
-    domains,
-    items,
-    focusEvents: state.focusEvents.slice(),
-    awayMs,
-    attempt: state.attempt,
-    ref: ""
-  };
-};
-
-const buildSheet = r => {
-  const line = "=".repeat(64);
-  const thin = "-".repeat(64);
-  const L = [];
-  L.push("NATIONAL SECURITY AGENCY // CYBERSECURITY DIRECTORATE");
-  L.push(CODE + " ASSESSMENT ANSWER SHEET");
-  L.push(line);
-  L.push("Candidate       : " + r.callsign);
-  L.push("Rank            : " + r.rank);
-  L.push("Submission Ref  : " + r.ref);
-  L.push("Started (UTC)   : " + new Date(r.startedAt).toISOString());
-  L.push("Submitted (UTC) : " + new Date(r.finishedAt).toISOString());
-  L.push("Duration        : " + fmtDur(r.duration));
-  L.push("End Condition   : " + r.reason);
-  L.push("Score           : " + r.score + "% (" + r.correct + "/" + BANK.length + ") " + (r.qualified ? "QUALIFIED" : "NOT QUALIFIED"));
-  L.push("Answered        : " + r.answered + "/" + BANK.length);
-  L.push("Flagged         : " + r.flagged);
-  L.push("Focus Loss      : " + r.focusEvents.length + (r.focusEvents.length ? " (" + fmtDur(r.awayMs) + " away)" : ""));
-  r.focusEvents.forEach((e, i) => L.push("  #" + (i + 1) + " at " + fmtClock(e.at) + " for " + fmtDur(e.dur || 0)));
-  L.push("Device Attempt  : " + r.attempt);
-  L.push("");
-  L.push("DOMAIN BREAKDOWN");
-  L.push(thin);
-  const w = Math.max(...[...r.domains.keys()].map(d => d.length));
-  r.domains.forEach((v, d) => L.push(d.padEnd(w + 2) + v.c + "/" + v.t));
-  L.push("");
-  L.push("ITEM RESPONSES (in the order presented to the candidate)");
-  L.push(thin);
-  r.items.forEach(it => {
-    L.push("");
-    L.push("#" + pad(it.pos) + "  " + it.result + (it.flagged ? "  [FLAGGED]" : "") + "  [" + it.q.t + " | " + it.q.d + "]  time " + fmtDur(it.time));
-    L.push("Q: " + it.q.q);
-    L.push("Candidate: " + (it.ans === null ? "(no answer)" : letter(it.qi, it.ans) + ") " + it.q.a[it.ans]));
-    if (it.result !== "CORRECT") L.push("Correct:   " + letter(it.qi, it.key) + ") " + it.q.a[it.key]);
-  });
-  L.push("");
-  L.push(line);
-  L.push("Roblox milsim roleplay group. Not affiliated with the U.S. Government.");
-  return L.join("\n");
-};
-
-const fitCodeBlock = (lines, limit) => {
-  const out = [];
-  let size = 8;
-  for (const l of lines) {
-    if (size + l.length + 1 > limit) break;
-    out.push(l);
-    size += l.length + 1;
-  }
-  return "```\n" + out.join("\n") + "\n```";
-};
-
-const buildPayload = (r, tryNo) => {
-  const https = location.protocol === "https:";
-  const icon = https ? new URL("assets/img/apple-touch-icon.png", location.href).href : null;
-  const w = Math.max(...[...r.domains.keys()].map(d => d.length));
-  const domainLines = [...r.domains].map(([d, v]) => d.padEnd(w + 2) + v.c + "/" + v.t + (v.c === v.t ? "" : "  -" + (v.t - v.c)));
-  const marks = r.items.map(it => it.result === "CORRECT" ? "✅" : it.result === "INCORRECT" ? "❌" : "⬜");
-  const gridLines = [];
-  for (let i = 0; i < marks.length; i += 10) gridLines.push((pad(i + 1) + " " + marks.slice(i, i + 5).join("") + " " + marks.slice(i + 5, i + 10).join("")).trimEnd());
-  const flaggedList = r.items.filter(it => it.flagged).map(it => "#" + pad(it.pos)).join(", ");
-  const embed = {
-    title: "NSA " + CODE + " Cyber Assessment Submission",
-    description: "**" + mdEscape(r.callsign).slice(0, 80) + "** (" + mdEscape(r.rank) + ") " + (r.qualified ? "met" : "did not meet") + " the " + PASS_MARK + "% qualification bar. Full answer sheet attached.",
-    color: r.qualified ? 3138447 : 16728417,
-    fields: [
-      { name: "Candidate", value: mdEscape(r.callsign).slice(0, 200) || "N/A", inline: true },
-      { name: "Rank", value: mdEscape(r.rank) || "N/A", inline: true },
-      { name: "Submission Ref", value: "`" + r.ref + "`", inline: true },
-      { name: "Score", value: r.score + "% (" + r.correct + "/" + BANK.length + ")", inline: true },
-      { name: "Status", value: r.qualified ? "QUALIFIED" : "NOT QUALIFIED", inline: true },
-      { name: "Answered", value: r.answered + "/" + BANK.length + (r.flagged ? " (" + r.flagged + " flagged)" : ""), inline: true },
-      { name: "Duration", value: fmtDur(r.duration), inline: true },
-      { name: "Focus Loss", value: r.focusEvents.length + (r.focusEvents.length ? " (" + fmtDur(r.awayMs) + " away)" : ""), inline: true },
-      { name: "End Condition", value: r.reason + (r.attempt > 1 ? " • device attempt " + r.attempt : ""), inline: true },
-      { name: "Domain Breakdown", value: fitCodeBlock(domainLines, 1024), inline: false },
-      { name: "Answer Grid (presentation order)", value: fitCodeBlock(gridLines, 960) + "\n✅ correct  ❌ incorrect  ⬜ unanswered", inline: false }
-    ],
-    footer: { text: "NSA Cybersecurity Directorate • " + CODE + (tryNo > 1 ? " • delivery attempt " + tryNo : "") },
-    timestamp: new Date(r.finishedAt).toISOString()
-  };
-  if (flaggedList) embed.fields.push({ name: "Flagged Items", value: flaggedList.slice(0, 1024), inline: false });
-  if (icon) {
-    embed.author = { name: "National Security Agency", icon_url: icon };
-    embed.thumbnail = { url: icon };
-  }
-  const payload = {
-    username: String(SITE.botName || "").replace(/discord|clyde/gi, "").replace(/\s+/g, " ").trim().slice(0, 80) || "NSA Recruitment Terminal",
-    allowed_mentions: { parse: [] },
-    embeds: [embed]
-  };
-  if (icon) payload.avatar_url = icon;
-  return payload;
-};
-
-const buildForm = (r, tryNo) => {
-  const form = new FormData();
-  form.append("payload_json", JSON.stringify(buildPayload(r, tryNo)));
-  const name = CODE + "_" + fileSafe(r.callsign) + "_" + r.ref + ".txt";
-  form.append("files[0]", new Blob([r.sheet], { type: "text/plain;charset=utf-8" }), name);
-  return form;
-};
-
-const retryAfterMs = async res => {
-  let s = NaN;
-  try {
-    const j = await res.clone().json();
-    s = Number(j.retry_after);
-  } catch (e) {}
-  const h = res.headers.get("Retry-After");
-  if (!Number.isFinite(s) && h !== null && h.trim() !== "") s = Number(h);
-  return (Number.isFinite(s) && s >= 0 ? Math.min(60000, Math.ceil(s * 1000) + 250) : 2000) + rand(1000);
-};
-
-const sendOnce = async (r, tryNo) => {
-  const body = buildForm(r, tryNo);
-  if (endpoint.transport === "no-cors") {
-    await fetchWithTimeout(endpoint.post, { method: "POST", body, mode: "no-cors" }, 30000);
-    return { ok: true, confirmed: false };
-  }
-  const res = await fetchWithTimeout(endpoint.post, { method: "POST", body, mode: "cors" }, 30000);
-  if (res.ok) return { ok: true, confirmed: true };
-  if (res.status === 429) return { ok: false, retry: true, wait: await retryAfterMs(res), status: 429 };
-  if (res.status >= 500) return { ok: false, retry: true, wait: null, status: res.status };
-  let detail = "";
-  try { detail = (await res.text()).slice(0, 300); } catch (e) {}
-  console.error("Submission rejected", res.status, detail);
-  return { ok: false, retry: false, status: res.status };
-};
-
-const transmit = async r => {
-  if (!endpoint) return { ok: false, status: "unconfigured" };
-  let last = { ok: false, status: "network" };
+const transmit = async body => {
+  let last = { ok: false, status: "network", data: {} };
   for (let i = 1; i <= MAX_SEND_TRIES; i++) {
-    state.sendTry++;
-    try {
-      last = await sendOnce(r, state.sendTry);
-    } catch (e) {
-      last = { ok: false, retry: true, wait: null, status: "network" };
-    }
-    if (last.ok || !last.retry || i === MAX_SEND_TRIES) return last;
-    await sleep(last.wait != null ? last.wait : 1000 * 2 ** (i - 1));
+    last = await api("/submit", body, 60000);
+    if (last.ok) return last;
+    if (typeof last.data.receipt === "string") body.receipt = last.data.receipt;
+    const upstream = Number(last.data.status);
+    const permanent = last.data.error === "discord" && upstream >= 400 && upstream < 500 && upstream !== 429;
+    const retryable = !permanent && (last.status === "network" || last.status === 429 || (typeof last.status === "number" && last.status >= 500));
+    if (!retryable || i === MAX_SEND_TRIES) return last;
+    await sleep(1500 * 2 ** (i - 1) + rand(750));
   }
   return last;
 };
@@ -597,6 +530,7 @@ const setDelivery = (mode, detail) => {
   const st = $("resultStatus");
   const tx = $("tx");
   const fail = $("txFail");
+  const chip = $("statusChip");
   st.classList.remove("pending", "fail");
   tx.classList.remove("ok", "fail");
   if (mode === "sending") {
@@ -607,45 +541,37 @@ const setDelivery = (mode, detail) => {
     $("rIntegrity").textContent = "Transmitting…";
     fail.classList.add("hidden");
     $("retryBtn").disabled = true;
-    $("statusChip").textContent = "TRANSMITTING";
-    $("statusChip").classList.remove("off");
+    chip.textContent = "TRANSMITTING";
+    chip.classList.remove("off");
   } else if (mode === "sent") {
     tx.classList.add("ok");
     st.textContent = "Response Transmitted";
     $("txBar").style.width = "100%";
-    $("resultMsg").textContent = "Your responses have been sealed and transmitted to the NSA Cybersecurity Directorate for command review.";
-    $("rIntegrity").textContent = (detail ? "Delivered (confirmed)" : "Transmitted (unconfirmed)") + (state.report.reason === "Time Expired" ? " • window expired" : "");
+    $("resultMsg").textContent = "Your responses have been sealed and delivered to the NSA Cybersecurity Directorate for command review.";
+    $("rRef").textContent = detail || state.ref || "—";
+    $("rIntegrity").textContent = "Delivered (confirmed)" + (state.submission.reason === "Time Expired" ? " • window expired" : "");
     fail.classList.add("hidden");
-    $("statusChip").textContent = "PACKAGE SEALED";
+    chip.textContent = "PACKAGE SEALED";
   } else {
     st.classList.add("fail");
     tx.classList.add("fail");
     st.textContent = "Transmission Failed";
     $("txBar").style.width = "100%";
     $("resultMsg").textContent = "Your responses were not delivered. Keep this page open and retry.";
-    $("rIntegrity").textContent = "Not delivered" + (detail ? " (" + detail + ")" : "");
+    $("rIntegrity").textContent = "Not delivered (" + detail + ")";
     fail.classList.remove("hidden");
     $("retryBtn").disabled = false;
-    const chip = $("statusChip");
     chip.textContent = "LINK FAULT";
     chip.classList.add("off");
   }
 };
 
 const deliver = async () => {
-  if (!state.report || state.delivery === "sending" || state.delivery === "sent") return;
+  if (!state.submission || state.delivery === "sending" || state.delivery === "sent") return;
   setDelivery("sending");
-  if (endpoint && endpoint.status === "unverified" && await probeEndpoint() === "invalid") {
-    setDelivery("failed", "endpoint rejected");
-    return;
-  }
-  const res = await transmit(state.report);
-  if (res.ok) {
-    setDelivery("sent", res.confirmed);
-  } else {
-    const d = res.status === "unconfigured" ? "no endpoint configured" : res.status === "network" ? "network error" : "HTTP " + res.status;
-    setDelivery("failed", d);
-  }
+  const res = await transmit(state.submission);
+  if (res.ok) setDelivery("sent", res.data.ref || state.ref);
+  else setDelivery("failed", failText(res));
 };
 
 const finish = async (reason) => {
@@ -656,16 +582,22 @@ const finish = async (reason) => {
   markTime(finishedAt);
   state.viewing = null;
   if (state.away) closeAway(finishedAt);
-  const r = grade(reason, finishedAt);
-  r.ref = "CSD-" + finishedAt.toString(36).toUpperCase();
-  try { r.ref = await makeRef(r.callsign + "|" + r.rank + "|" + finishedAt + "|" + state.answers.join(",")); } catch (e) {}
-  r.sheet = buildSheet(r);
-  state.report = r;
-  $("rCandidate").textContent = r.callsign;
-  $("rRank").textContent = r.rank;
-  $("rRef").textContent = r.ref;
+  state.submission = {
+    session: state.session,
+    reason,
+    order: state.order,
+    optOrder: state.optOrder,
+    answers: state.answers,
+    flags: state.flags,
+    itemTime: state.itemTime.map(t => Math.round(t)),
+    focusEvents: state.focusEvents.map(e => ({ at: Math.round(e.at), dur: Math.round(e.dur) })),
+    attempt: state.attempt
+  };
+  $("rCandidate").textContent = cleanCallsign();
+  $("rRank").textContent = $("rank").value;
+  $("rRef").textContent = state.ref || "Pending";
   $("rTime").textContent = new Date(finishedAt).toUTCString();
-  $("rDur").textContent = fmtDur(r.duration);
+  $("rDur").textContent = fmtDur(finishedAt - state.startedAt);
   show("result");
   await deliver();
 };
@@ -725,4 +657,6 @@ window.addEventListener("beforeunload", e => {
     e.returnValue = state.running ? "Assessment in progress." : "Responses not yet delivered.";
   }
 });
+
+init();
 })();
