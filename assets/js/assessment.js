@@ -162,6 +162,10 @@ const checkLink = async () => {
     return;
   }
   state.turnstile = Boolean(h.data.turnstile);
+  if (state.turnstile && !String(SITE.turnstileSiteKey || "").trim()) {
+    setOffline("Submissions are offline: the security check is not configured on this site (missing Turnstile site key). Contact command before attempting the assessment.");
+    return;
+  }
   if (state.turnstile) {
     try {
       await mountTurnstile();
