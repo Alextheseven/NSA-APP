@@ -1,4 +1,4 @@
 window.NSA_CONFIG = Object.freeze({
   relay: "",
-  turnstileSiteKey: ""
+  turnstileSiteKey: "0x4AAAAAAFSWcfzIKwNjviu2"
 });
