@@ -28,7 +28,7 @@ candidate's browser ──► relay (Cloudflare Worker) ──► Discord webhoo
 
 How the relay protects the webhook:
 
-- **Turnstile bot check:** candidates pass Cloudflare Turnstile before an attempt starts. Scripts can't start sessions in bulk.
+- **Turnstile bot check:** candidates pass Cloudflare Turnstile before an attempt starts. Scripts can't start sessions in bulk. The relay refuses to run without a Turnstile secret.
 - **Signed session:** the relay hands out a signed session token at start. `/submit` only accepts a valid token that is under 65 minutes old, and posts once per session.
 - **Allowed origin only:** requests are accepted only from the origin in `ALLOWED_ORIGIN`. Each IP can start at most 8 attempts per 10 minutes.
 - **Graded by the relay:** the score is computed from the submitted answers with the secret key. A forged score is impossible, and the correct answers never reach the browser.
@@ -64,7 +64,7 @@ Allow about 15 minutes. You need a free Cloudflare account.
 | Name | Type | Value |
 | --- | --- | --- |
 | `DISCORD_WEBHOOK` | Secret | the new webhook URL |
-| `ANSWER_KEY` | Secret | the answer key string (see below) |
+| `ANSWER_KEY` | Secret | the answer key value (see below) |
 | `TURNSTILE_SECRET` | Secret | the Turnstile secret key |
 | `ALLOWED_ORIGIN` | Text | `https://alextheseven.github.io` |
 | `SITE_URL` | Text | `https://alextheseven.github.io/NSA-APP/` |
@@ -92,18 +92,39 @@ If the header shows **LINK OFFLINE**, the notice says why:
 
 - **No relay configured:** `relay` is empty in `config.js`.
 - **Relay unreachable:** the URL is wrong, or `ALLOWED_ORIGIN` doesn't match the site.
-- **Not fully configured (`webhook`, `answer_key`, `bank`, `site_url`, `allowed_origin`):** a worker variable is missing or wrong.
+- **`webhook`:** `DISCORD_WEBHOOK` is missing or isn't a Discord webhook URL.
+- **`webhook_dead`:** Discord says the webhook was deleted. Create a new one and update the secret. This check refreshes every few minutes.
+- **`turnstile` / `turnstile_secret`:** `TURNSTILE_SECRET` is missing or wrong. The name must match exactly.
+- **Turnstile site key missing / misconfigured:** `turnstileSiteKey` is empty in `config.js`, or the widget isn't set up for `alextheseven.github.io`.
+- **`answer_key`:** `ANSWER_KEY` is missing or doesn't match the current questions (see below).
+- **`bank` / `site_url`:** the relay can't load `assets/data/bank.json` from `SITE_URL`.
+- **"The assessment was just updated":** the questions changed moments ago. Wait a minute and hard-refresh.
 
 ### Answer key
 
-`ANSWER_KEY` is one digit per question, in the order of `assets/data/bank.json`. Each digit is the position (0 to 3) of the correct option in that question's `a` list. If you edit, add, or reorder questions or options, update `ANSWER_KEY` to match. Until it does, the relay reports `answer_key` and the site stays offline. Never commit the key to this repository.
+`ANSWER_KEY` looks like `5d052ba48a80:0213...`:
+
+- **Before the colon:** a fingerprint of the current `assets/data/bank.json` questions.
+- **After the colon:** one digit (0 to 3) per question, giving the position of the correct option in that question's `a` list.
+
+The fingerprint ties the key to the exact question set. If anyone edits, adds, or reorders questions or options, the relay notices the mismatch and goes offline. It won't grade against the wrong answers. Sessions started on an older question set are rejected with "assessment changed", not misgraded.
+
+To build or update the key:
+
+1. Publish the question changes.
+2. Open `https://alextheseven.github.io/NSA-APP/tools/answer-key.html`.
+3. Paste the current key and click **Load Existing Key** to pre-fill the answers.
+4. Fix the answers, click **Build Key**, and paste the result into the `ANSWER_KEY` secret.
+
+The page runs entirely in your browser and contains no answers itself. Never commit the key to this repository.
 
 Earlier versions of this repository shipped the answer key to the browser. Those versions are still in git history, so treat the current questions as seen. Rotating in new questions over time fixes that.
 
 ### Limits
 
 - Item timing and focus-loss data come from the candidate's browser, so a technical candidate can fake them. Score, duration, and session are enforced by the relay.
-- Duplicate protection and the per-IP limit live in worker memory, so they are best effort. Retries of the same session show the same submission ref.
+- Duplicate protection and the per-IP limit (8 starts per 10 minutes per IPv4 address or IPv6 /64) live in worker memory, so they are best effort. Retries of the same session show the same submission ref.
+- If Discord is down when a candidate submits, the result screen offers a retry. The relay keeps the original receipt time, so a late retry isn't marked over the time limit.
 
 ## Structure
 
@@ -120,4 +141,6 @@ assets/
 relay/
   worker.js           Cloudflare Worker: Turnstile, sessions, grading, Discord delivery
   wrangler.toml       optional Wrangler CLI config
+tools/
+  answer-key.html     builds the ANSWER_KEY value from the published questions
 ```

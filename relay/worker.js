@@ -2,19 +2,25 @@ const RANKS = ["O5", "O6", "O7", "O8", "O9", "O10"];
 const REASONS = ["Submitted", "Time Expired"];
 const DISCORD_RE = /^https:\/\/(?:(?:canary|ptb)\.)?discord(?:app)?\.com\/api\/(?:v\d+\/)?webhooks\/\d+\/[\w-]+\/?$/;
 const MAX_BODY = 65536;
-const BANK_TTL_MS = 300000;
+const BANK_TTL_MS = 60000;
+const HOOK_TTL_MS = 300000;
 const SESSION_GRACE_MS = 900000;
 const START_WINDOW_MS = 600000;
 const START_LIMIT = 8;
+const DISCORD_TIMEOUT_MS = 8000;
+const DISCORD_MAX_WAIT_MS = 8000;
+const INFLIGHT_MS = 45000;
 const DEFAULT_BOT = "NSA Recruitment Terminal";
 const enc = new TextEncoder();
 
 let bankCache = null;
+let hookCache = null;
 const delivered = new Map();
 const inflight = new Map();
 const startHits = new Map();
 
 const pad = n => String(n).padStart(2, "0");
+const fresh = (at, ttl) => { const age = Date.now() - at; return age >= 0 && age < ttl; };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const hex = bytes => Array.from(bytes, b => b.toString(16).padStart(2, "0")).join("");
 const b64u = bytes => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -25,7 +31,9 @@ const json = (body, status, headers) => new Response(JSON.stringify(body), {
   headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", ...headers }
 });
 
-const allowedOrigins = env => String(env.ALLOWED_ORIGIN || "").split(",").map(s => s.trim().replace(/\/+$/, "")).filter(Boolean);
+const allowedOrigins = env => String(env.ALLOWED_ORIGIN || "").split(",").map(s => {
+  try { return new URL(s.trim()).origin; } catch (e) { return ""; }
+}).filter(o => o && o !== "null");
 
 const corsFor = (origin, ok) => ok ? {
   "Access-Control-Allow-Origin": origin,
@@ -45,41 +53,68 @@ const webhookUrl = env => {
   try { u = new URL(String(env.DISCORD_WEBHOOK || "").trim()); } catch (e) { return null; }
   if (!DISCORD_RE.test(u.origin + u.pathname)) return null;
   u.pathname = u.pathname.replace(/^\/api\/(?:v\d+\/)?/, "/api/v10/");
-  u.searchParams.set("wait", "true");
+  u.searchParams.delete("wait");
   return u;
 };
+
+const fingerprint = async items => hex(new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(JSON.stringify(items))))).slice(0, 12);
 
 const validBank = d => d && typeof d.code === "string" && Number.isFinite(d.duration) && d.duration > 0 &&
   Number.isFinite(d.passMark) && Array.isArray(d.items) && d.items.length > 0 &&
   d.items.every(it => it && typeof it.t === "string" && typeof it.d === "string" && typeof it.q === "string" &&
     Array.isArray(it.a) && it.a.length === 4 && it.a.every(x => typeof x === "string"));
 
-const loadBank = async env => {
-  const src = new URL("assets/data/bank.json", siteBase(env)).href;
-  if (bankCache && bankCache.src === src && Date.now() - bankCache.at < BANK_TTL_MS) return bankCache.data;
+const fetchFresh = async src => {
   try {
-    const res = await fetch(src, { cf: { cacheTtl: 300, cacheEverything: true } });
+    return await fetch(src, { cache: "no-store" });
+  } catch (e) {
+    return fetch(src);
+  }
+};
+
+const loadBank = async (env, force) => {
+  const src = new URL("assets/data/bank.json", siteBase(env)).href;
+  if (!force && bankCache && bankCache.src === src && fresh(bankCache.at, BANK_TTL_MS)) return bankCache;
+  try {
+    const res = await fetchFresh(src);
     if (!res.ok) throw new Error("bank " + res.status);
     const data = await res.json();
     if (!validBank(data)) throw new Error("bank shape");
-    bankCache = { src, at: Date.now(), data };
-    return data;
+    bankCache = { src, at: Date.now(), data, fp: await fingerprint(data.items) };
+    return bankCache;
   } catch (e) {
-    if (bankCache && bankCache.src === src) return bankCache.data;
+    if (bankCache && bankCache.src === src) return bankCache;
     throw e;
   }
 };
 
-const answerKey = env => String(env.ANSWER_KEY || "").replace(/\s+/g, "");
+const parseKey = env => {
+  const m = /^([0-9a-f]{12}):([0-3]+)$/.exec(String(env.ANSWER_KEY || "").replace(/\s+/g, "").toLowerCase());
+  return m ? { fp: m[1], digits: m[2].split("").map(Number) } : null;
+};
 
-const configError = async env => {
+const webhookAlive = async env => {
+  const href = webhookUrl(env).href;
+  if (hookCache && hookCache.href === href && fresh(hookCache.at, HOOK_TTL_MS)) return hookCache.ok;
+  let ok = true;
+  try {
+    const res = await fetch(href, { method: "GET", signal: AbortSignal.timeout(5000) });
+    ok = res.status !== 401 && res.status !== 404;
+  } catch (e) {}
+  hookCache = { href, at: Date.now(), ok };
+  return ok;
+};
+
+const configError = async (env, deep) => {
   if (!webhookUrl(env)) return "webhook";
   if (!String(env.SITE_URL || "").trim()) return "site_url";
   if (!allowedOrigins(env).length) return "allowed_origin";
+  if (!String(env.TURNSTILE_SECRET || "").trim()) return "turnstile";
   let bank;
   try { bank = await loadBank(env); } catch (e) { return "bank"; }
-  const key = answerKey(env);
-  if (!/^[0-3]+$/.test(key) || key.length !== bank.items.length) return "answer_key";
+  const key = parseKey(env);
+  if (!key || key.digits.length !== bank.data.items.length || key.fp !== bank.fp) return "answer_key";
+  if (deep && !await webhookAlive(env)) return "webhook_dead";
   return null;
 };
 
@@ -91,50 +126,81 @@ const cleanCallsign = v => {
 };
 
 const readJson = async request => {
-  const len = Number(request.headers.get("Content-Length") || 0);
-  if (len > MAX_BODY) return null;
-  const text = await request.text();
-  if (text.length > MAX_BODY) return null;
+  if (Number(request.headers.get("Content-Length") || 0) > MAX_BODY || !request.body) return null;
+  const reader = request.body.getReader();
+  const parts = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > MAX_BODY) {
+      reader.cancel().catch(() => {});
+      return null;
+    }
+    parts.push(value);
+  }
+  const buf = new Uint8Array(size);
+  let off = 0;
+  for (const p of parts) {
+    buf.set(p, off);
+    off += p.byteLength;
+  }
   try {
-    const v = JSON.parse(text);
+    const v = JSON.parse(new TextDecoder().decode(buf));
     return v && typeof v === "object" && !Array.isArray(v) ? v : null;
   } catch (e) {
     return null;
   }
 };
 
+const ipKey = ip => {
+  if (!ip.includes(":")) return ip;
+  const [head, tail] = ip.toLowerCase().split("::");
+  const h = head ? head.split(":") : [];
+  const t = tail === undefined ? [] : tail ? tail.split(":") : [];
+  const groups = tail === undefined ? h : [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill("0"), ...t];
+  return groups.slice(0, 4).join(":");
+};
+
 const rateOk = ip => {
+  const key = ipKey(ip);
   const now = Date.now();
-  if (startHits.size > 5000) startHits.clear();
-  const hits = (startHits.get(ip) || []).filter(t => now - t < START_WINDOW_MS);
+  if (startHits.size > 5000) {
+    for (const [k, v] of startHits) if (!v.length || now - v[v.length - 1] >= START_WINDOW_MS) startHits.delete(k);
+  }
+  const hits = (startHits.get(key) || []).filter(t => now - t < START_WINDOW_MS);
   if (hits.length >= START_LIMIT) {
-    startHits.set(ip, hits);
+    startHits.set(key, hits);
     return false;
   }
   hits.push(now);
-  startHits.set(ip, hits);
+  startHits.set(key, hits);
   return true;
 };
 
 const verifyTurnstile = async (env, token, ip) => {
-  if (!env.TURNSTILE_SECRET) return true;
-  if (typeof token !== "string" || !token || token.length > 2048) return false;
+  const secret = String(env.TURNSTILE_SECRET || "").trim();
+  if (!secret) return "misconfigured";
+  if (typeof token !== "string" || !token || token.length > 2048) return "fail";
   const form = new FormData();
-  form.append("secret", env.TURNSTILE_SECRET);
+  form.append("secret", secret);
   form.append("response", token);
   if (ip) form.append("remoteip", ip);
   let out;
   try {
-    const res = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", { method: "POST", body: form });
-    if (!res.ok) return false;
+    const res = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", { method: "POST", body: form, signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return "error";
     out = await res.json();
   } catch (e) {
-    return false;
+    return "error";
   }
-  if (!out || out.success !== true) return false;
-  if (!out.hostname) return true;
-  const hosts = allowedOrigins(env).map(o => { try { return new URL(o).hostname; } catch (e) { return ""; } });
-  return hosts.includes(out.hostname);
+  const codes = Array.isArray(out && out["error-codes"]) ? out["error-codes"] : [];
+  if (codes.includes("invalid-input-secret") || codes.includes("missing-input-secret")) return "misconfigured";
+  if (!out || out.success !== true) return "fail";
+  if (!out.hostname) return "ok";
+  const hosts = allowedOrigins(env).map(o => new URL(o).hostname);
+  return hosts.includes(String(out.hostname).toLowerCase()) ? "ok" : "fail";
 };
 
 const hmacKey = env => crypto.subtle.importKey(
@@ -145,25 +211,38 @@ const hmacKey = env => crypto.subtle.importKey(
   ["sign", "verify"]
 );
 
-const signSession = async (env, payload) => {
+const signToken = async (env, payload) => {
   const body = b64u(enc.encode(JSON.stringify(payload)));
   const sig = new Uint8Array(await crypto.subtle.sign("HMAC", await hmacKey(env), enc.encode(body)));
   return body + "." + b64u(sig);
 };
 
-const openSession = async (env, token) => {
+const openToken = async (env, token) => {
   if (typeof token !== "string" || token.length > 2048) return null;
   const parts = token.split(".");
   if (parts.length !== 2) return null;
   try {
     const ok = await crypto.subtle.verify("HMAC", await hmacKey(env), b64uDecode(parts[1]), enc.encode(parts[0]));
     if (!ok) return null;
-    const s = JSON.parse(new TextDecoder().decode(b64uDecode(parts[0])));
-    if (!s || s.v !== 1 || typeof s.sid !== "string" || !Number.isFinite(s.t) || typeof s.cs !== "string" || !RANKS.includes(s.rk) || !Number.isInteger(s.n)) return null;
-    return s;
+    const v = JSON.parse(new TextDecoder().decode(b64uDecode(parts[0])));
+    return v && typeof v === "object" ? v : null;
   } catch (e) {
     return null;
   }
+};
+
+const openSession = async (env, token) => {
+  const s = await openToken(env, token);
+  if (!s || s.v !== 1 || typeof s.sid !== "string" || !Number.isFinite(s.t) || typeof s.cs !== "string" ||
+    !RANKS.includes(s.rk) || !Number.isInteger(s.n) || typeof s.fp !== "string") return null;
+  return s;
+};
+
+const openReceipt = async (env, token, sess, now) => {
+  if (token === undefined || token === null) return null;
+  const r = await openToken(env, token);
+  if (!r || r.v !== 2 || r.sid !== sess.sid || !Number.isFinite(r.at) || r.at < sess.t || r.at > now) return null;
+  return r.at;
 };
 
 const isPerm = (arr, n) => {
@@ -352,11 +431,12 @@ const retryAfterMs = async res => {
   try { s = Number((await res.clone().json()).retry_after); } catch (e) {}
   const h = res.headers.get("Retry-After");
   if (!Number.isFinite(s) && h !== null && h.trim() !== "") s = Number(h);
-  return Number.isFinite(s) && s >= 0 ? Math.min(8000, Math.ceil(s * 1000) + 250) : 2000;
+  return Number.isFinite(s) && s >= 0 ? Math.ceil(s * 1000) + 250 : 2000;
 };
 
 const postDiscord = async (env, bank, r) => {
-  const target = webhookUrl(env).href;
+  const target = webhookUrl(env);
+  target.searchParams.set("wait", "true");
   const sheet = buildSheet(bank, r);
   const fileName = bank.code + "_" + fileSafe(r.callsign) + "_" + r.ref + ".txt";
   let last = 0;
@@ -365,10 +445,15 @@ const postDiscord = async (env, bank, r) => {
     form.append("payload_json", JSON.stringify(buildPayload(env, bank, r, i)));
     form.append("files[0]", new Blob([sheet], { type: "text/plain;charset=utf-8" }), fileName);
     let res = null;
-    try { res = await fetch(target, { method: "POST", body: form }); } catch (e) { res = null; }
+    try { res = await fetch(target.href, { method: "POST", body: form, signal: AbortSignal.timeout(DISCORD_TIMEOUT_MS) }); } catch (e) { res = null; }
     if (res && res.ok) return { ok: true };
     last = res ? res.status : 0;
-    if (res && res.status === 429) { await sleep(await retryAfterMs(res)); continue; }
+    if (res && res.status === 429) {
+      const wait = await retryAfterMs(res);
+      if (i === 3 || wait > DISCORD_MAX_WAIT_MS) return { ok: false, status: 429 };
+      await sleep(wait);
+      continue;
+    }
     if (res && res.status < 500) return { ok: false, status: res.status };
     if (i < 3) await sleep(500 * 2 ** (i - 1));
   }
@@ -376,13 +461,15 @@ const postDiscord = async (env, bank, r) => {
 };
 
 const handleHealth = async (env, cors) => {
-  const err = await configError(env);
+  const err = await configError(env, true);
   if (err) return json({ ok: false, error: err }, 503, cors);
-  return json({ ok: true, turnstile: Boolean(env.TURNSTILE_SECRET) }, 200, cors);
+  const bank = await loadBank(env);
+  return json({ ok: true, turnstile: true, fp: bank.fp }, 200, cors);
 };
 
 const handleStart = async (request, env, cors) => {
-  if (await configError(env)) return json({ ok: false, error: "offline" }, 503, cors);
+  const err = await configError(env, true);
+  if (err) return json({ ok: false, error: "offline", reason: err }, 503, cors);
   const ip = request.headers.get("CF-Connecting-IP") || "";
   if (!rateOk(ip)) return json({ ok: false, error: "rate" }, 429, cors);
   const body = await readJson(request);
@@ -390,60 +477,73 @@ const handleStart = async (request, env, cors) => {
   const callsign = cleanCallsign(body.callsign);
   if (!callsign) return json({ ok: false, error: "callsign" }, 400, cors);
   if (!RANKS.includes(body.rank)) return json({ ok: false, error: "rank" }, 400, cors);
-  if (!await verifyTurnstile(env, body.turnstile, ip)) return json({ ok: false, error: "turnstile" }, 403, cors);
-  const bank = await loadBank(env);
-  const session = await signSession(env, {
-    v: 1,
-    sid: hex(crypto.getRandomValues(new Uint8Array(12))),
-    t: Date.now(),
-    cs: callsign,
-    rk: body.rank,
-    n: bank.items.length
-  });
-  return json({ ok: true, session }, 200, cors);
+  let bank = await loadBank(env);
+  if (body.fp !== bank.fp) {
+    bank = await loadBank(env, true);
+    if (body.fp !== bank.fp) return json({ ok: false, error: "bank_changed" }, 409, cors);
+  }
+  const ts = await verifyTurnstile(env, body.turnstile, ip);
+  if (ts === "misconfigured") return json({ ok: false, error: "offline", reason: "turnstile_secret" }, 503, cors);
+  if (ts === "error") return json({ ok: false, error: "turnstile_unavailable" }, 503, cors);
+  if (ts !== "ok") return json({ ok: false, error: "turnstile" }, 403, cors);
+  const sid = hex(crypto.getRandomValues(new Uint8Array(12)));
+  const session = await signToken(env, { v: 1, sid, t: Date.now(), cs: callsign, rk: body.rank, n: bank.data.items.length, fp: bank.fp });
+  return json({ ok: true, session, ref: await makeRef(sid) }, 200, cors);
 };
 
-const handleSubmit = async (request, env, cors) => {
-  if (await configError(env)) return json({ ok: false, error: "offline" }, 503, cors);
+const handleSubmit = async (request, env, cors, ctx) => {
+  const err = await configError(env, false);
+  if (err) return json({ ok: false, error: "offline", reason: err }, 503, cors);
   const body = await readJson(request);
   if (!body) return json({ ok: false, error: "payload" }, 400, cors);
   const sess = await openSession(env, body.session);
   if (!sess) return json({ ok: false, error: "session" }, 401, cors);
-  const bank = await loadBank(env);
-  if (sess.n !== bank.items.length) return json({ ok: false, error: "bank_changed" }, 409, cors);
+  let bank = await loadBank(env);
+  if (sess.fp !== bank.fp) {
+    bank = await loadBank(env, true);
+    if (sess.fp !== bank.fp || sess.n !== bank.data.items.length) return json({ ok: false, error: "bank_changed" }, 409, cors);
+  }
   const now = Date.now();
-  const limitMs = bank.duration * 1000;
+  const limitMs = bank.data.duration * 1000;
   if (now < sess.t || now - sess.t > limitMs + SESSION_GRACE_MS) return json({ ok: false, error: "expired" }, 401, cors);
   const prior = delivered.get(sess.sid);
   if (prior) return json({ ok: true, ref: prior.ref, duplicate: true }, 200, cors);
-  if (inflight.has(sess.sid)) {
-    const r = await inflight.get(sess.sid);
-    return r.ok ? json({ ok: true, ref: r.ref, duplicate: true }, 200, cors) : json({ ok: false, error: "discord", status: r.status }, 502, cors);
+  const pending = inflight.get(sess.sid);
+  if (pending && now - pending.at < INFLIGHT_MS) {
+    const r = await Promise.race([pending.p, sleep(INFLIGHT_MS - (now - pending.at)).then(() => null)]);
+    if (!r) return json({ ok: false, error: "busy" }, 503, cors);
+    return r.ok ? json({ ok: true, ref: r.ref, duplicate: true }, 200, cors) : json({ ok: false, error: "discord", status: r.status, receipt: r.receipt }, 502, cors);
   }
-  const sub = validateSubmission(body, bank.items.length, limitMs + SESSION_GRACE_MS);
+  const sub = validateSubmission(body, bank.data.items.length, limitMs + SESSION_GRACE_MS);
   if (!sub) return json({ ok: false, error: "payload" }, 400, cors);
-  const run = (async () => {
-    const key = answerKey(env).split("").map(Number);
-    const report = grade(bank, key, sess, sub, now);
+  const receivedAt = (await openReceipt(env, body.receipt, sess, now)) || now;
+  const key = parseKey(env).digits;
+  const data = bank.data;
+  const p = (async () => {
+    const report = grade(data, key, sess, sub, receivedAt);
     report.ref = await makeRef(sess.sid);
-    const res = await postDiscord(env, bank, report);
-    return { ...res, ref: report.ref };
+    let res;
+    try { res = await postDiscord(env, data, report); } catch (e) { res = { ok: false, status: 0 }; }
+    if (res.ok) {
+      if (delivered.size > 5000) delivered.clear();
+      delivered.set(sess.sid, { ref: report.ref, at: Date.now() });
+      return { ok: true, ref: report.ref };
+    }
+    return { ok: false, status: res.status, ref: report.ref, receipt: await signToken(env, { v: 2, sid: sess.sid, at: receivedAt }) };
   })();
-  inflight.set(sess.sid, run);
-  let result;
-  try {
-    result = await run;
-  } finally {
-    inflight.delete(sess.sid);
-  }
-  if (!result.ok) return json({ ok: false, error: "discord", status: result.status }, 502, cors);
-  if (delivered.size > 5000) delivered.clear();
-  delivered.set(sess.sid, { ref: result.ref, at: now });
+  inflight.set(sess.sid, { p, at: now });
+  const settled = p.finally(() => {
+    const cur = inflight.get(sess.sid);
+    if (cur && cur.p === p) inflight.delete(sess.sid);
+  });
+  if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(settled.catch(() => {}));
+  const result = await p;
+  if (!result.ok) return json({ ok: false, error: "discord", status: result.status, receipt: result.receipt }, 502, cors);
   return json({ ok: true, ref: result.ref }, 200, cors);
 };
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const origin = request.headers.get("Origin") || "";
     const allowed = allowedOrigins(env).includes(origin);
@@ -453,7 +553,7 @@ export default {
     try {
       if (url.pathname === "/health" && request.method === "GET") return await handleHealth(env, cors);
       if (url.pathname === "/start" && request.method === "POST") return await handleStart(request, env, cors);
-      if (url.pathname === "/submit" && request.method === "POST") return await handleSubmit(request, env, cors);
+      if (url.pathname === "/submit" && request.method === "POST") return await handleSubmit(request, env, cors, ctx);
       return json({ ok: false, error: "not_found" }, 404, cors);
     } catch (e) {
       return json({ ok: false, error: "server" }, 500, cors);

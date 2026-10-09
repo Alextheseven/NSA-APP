@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en" class="no-js">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Answer Key Builder | National Security Agency</title>
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#04070c">
+<link rel="icon" type="image/png" href="../assets/img/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700;800&family=Cinzel:wght@600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/css/site.css">
+<style>
+.tool { padding: 36px 40px; display: grid; gap: 22px; }
+.row-btns { display: flex; gap: 10px; flex-wrap: wrap; }
+.out { font-family: var(--mono); font-size: 12.5px; color: var(--gold-2); background: rgba(4, 8, 14, 0.85); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; word-break: break-all; min-height: 48px; }
+.msg { font-family: var(--mono); font-size: 12px; min-height: 18px; }
+.msg.ok { color: var(--green); }
+.msg.bad { color: var(--red); }
+.items { display: grid; gap: 14px; }
+.item { border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; background: var(--surface); }
+.item.missing { border-color: rgba(255, 65, 97, 0.5); }
+.item h3 { margin: 0 0 4px; font-size: 11px; font-family: var(--mono); letter-spacing: 0.14em; color: var(--gold); text-transform: uppercase; }
+.item p { color: #fff; font-size: 14.5px; margin: 0 0 10px; }
+.item label { display: flex; gap: 10px; align-items: flex-start; padding: 6px 0; color: var(--text-2); font-size: 13.5px; cursor: pointer; line-height: 1.5; }
+.item input { margin-top: 3px; accent-color: #d4a937; }
+@media (max-width: 760px) { .tool { padding: 24px 20px; } }
+</style>
+</head>
+<body>
+<div class="classbar">COMMAND STAFF // ANSWER KEY BUILDER</div>
+<header class="site-header">
+  <div class="inner">
+    <a class="brand" href="../">
+      <img src="../assets/img/seal.webp" alt="National Security Agency seal" width="44" height="44">
+      <div>
+        <strong>NATIONAL SECURITY AGENCY</strong>
+        <span>CYBERSECURITY DIRECTORATE</span>
+      </div>
+    </a>
+  </div>
+</header>
+<div class="wrap">
+  <section class="panel tool">
+    <span class="corner tl"></span><span class="corner br"></span>
+    <div>
+      <div class="eyebrow">Command Staff Only</div>
+      <h2 style="margin-top: 10px;">Answer Key Builder</h2>
+      <p style="margin-top: 10px;">Builds the <code>ANSWER_KEY</code> value for the relay from the questions currently published in <code>assets/data/bank.json</code>. Everything happens in this browser. Nothing you select is saved or sent anywhere. Paste the result only into the relay's <code>ANSWER_KEY</code> secret in Cloudflare, never into this repository.</p>
+    </div>
+    <div class="field">
+      <label for="existing">Existing ANSWER_KEY (optional, pre-fills the selections)</label>
+      <input id="existing" type="text" autocomplete="off" spellcheck="false" placeholder="a1b2c3d4e5f6:0123...">
+    </div>
+    <div class="row-btns">
+      <button class="btn ghost" id="loadBtn" type="button">Load Existing Key</button>
+      <button class="btn primary" id="buildBtn" type="button">Build Key</button>
+    </div>
+    <div class="msg" id="msg" aria-live="polite"></div>
+    <div>
+      <div class="section-label">ANSWER_KEY value</div>
+      <div class="out" id="out">—</div>
+      <div class="row-btns" style="margin-top: 12px;"><button class="btn ghost" id="copyBtn" type="button" disabled>Copy</button></div>
+    </div>
+    <div class="items" id="items"></div>
+  </section>
+</div>
+<script src="../assets/js/site.js"></script>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const say = (text, cls) => { const m = $("msg"); m.textContent = text; m.className = "msg " + (cls || ""); };
+  let items = [];
+  let fp = "";
+  let value = "";
+  const render = () => {
+    $("items").replaceChildren(...items.map((it, i) => {
+      const box = document.createElement("div");
+      box.className = "item";
+      box.id = "item" + i;
+      const h = document.createElement("h3");
+      h.textContent = "#" + String(i + 1).padStart(2, "0") + " · " + it.t + " · " + it.d;
+      const p = document.createElement("p");
+      p.textContent = it.q;
+      box.append(h, p);
+      it.a.forEach((txt, oi) => {
+        const l = document.createElement("label");
+        const r = document.createElement("input");
+        r.type = "radio";
+        r.name = "q" + i;
+        r.value = String(oi);
+        const s = document.createElement("span");
+        s.textContent = String.fromCharCode(65 + oi) + ") " + txt;
+        l.append(r, s);
+        box.appendChild(l);
+      });
+      return box;
+    }));
+  };
+  const load = async () => {
+    try {
+      const res = await fetch("../assets/data/bank.json", { cache: "no-cache" });
+      const d = await res.json();
+      items = d.items;
+      fp = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(items)))), b => b.toString(16).padStart(2, "0")).join("").slice(0, 12);
+      render();
+      say(items.length + " questions loaded. Question set fingerprint " + fp + ".", "ok");
+    } catch (e) {
+      say("Could not load assets/data/bank.json.", "bad");
+    }
+  };
+  $("loadBtn").addEventListener("click", () => {
+    const m = /^([0-9a-f]{12}):([0-3]+)$/.exec($("existing").value.replace(/\s+/g, "").toLowerCase());
+    if (!m) { say("That is not a valid ANSWER_KEY value.", "bad"); return; }
+    if (m[2].length !== items.length) { say("That key has " + m[2].length + " answers but there are " + items.length + " questions.", "bad"); return; }
+    m[2].split("").forEach((d, i) => {
+      const r = document.querySelector('input[name="q' + i + '"][value="' + d + '"]');
+      if (r) r.checked = true;
+    });
+    say(m[1] === fp ? "Key loaded. It matches the current questions." : "Key loaded, but it was built for a different question set. Check every answer, then build a new key.", m[1] === fp ? "ok" : "bad");
+  });
+  $("buildBtn").addEventListener("click", () => {
+    const digits = [];
+    let missing = 0;
+    items.forEach((_, i) => {
+      const r = document.querySelector('input[name="q' + i + '"]:checked');
+      $("item" + i).classList.toggle("missing", !r);
+      if (!r) missing++;
+      digits.push(r ? r.value : "");
+    });
+    if (missing) { say(missing + " question(s) have no correct answer selected.", "bad"); return; }
+    value = fp + ":" + digits.join("");
+    $("out").textContent = value;
+    $("copyBtn").disabled = false;
+    say("Key built. Paste it into the relay's ANSWER_KEY secret and deploy.", "ok");
+  });
+  $("copyBtn").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(value); say("Copied.", "ok"); } catch (e) { say("Copy failed. Select the value and copy it manually.", "bad"); }
+  });
+  load();
+})();
+</script>
+</body>
+</html>

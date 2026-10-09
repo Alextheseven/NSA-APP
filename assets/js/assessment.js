@@ -17,7 +17,9 @@ const state = {
   tsWidget: null,
   tsToken: null,
   starting: false,
+  fp: "",
   session: null,
+  ref: "",
   running: false,
   order: [],
   optOrder: [],
@@ -38,10 +40,12 @@ const state = {
 };
 
 const relayBase = (() => {
+  const raw = String(SITE.relay || "").trim();
+  if (!raw) return null;
   let u;
-  try { u = new URL(String(SITE.relay || "").trim()); } catch (e) { return null; }
+  try { u = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : "https://" + raw); } catch (e) { return undefined; }
   const local = u.hostname === "localhost" || u.hostname === "127.0.0.1";
-  if (u.protocol !== "https:" && !(local && u.protocol === "http:")) return null;
+  if (u.protocol !== "https:" && !(local && u.protocol === "http:")) return undefined;
   return u.origin + u.pathname.replace(/\/+$/, "");
 })();
 
@@ -102,6 +106,7 @@ const loadBank = async () => {
   const d = await res.json();
   if (!d || !Array.isArray(d.items) || !d.items.length) throw new Error("bank shape");
   BANK = d.items;
+  state.fp = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(d.items)))), b => b.toString(16).padStart(2, "0")).join("").slice(0, 12);
   DURATION = Number(d.duration) || DURATION;
   CODE = d.code || CODE;
   const domainSet = [...new Set(BANK.map(q => q.t))];
@@ -145,20 +150,49 @@ const mountTurnstile = async () => {
     action: "start",
     callback: token => { state.tsToken = token; },
     "expired-callback": () => { state.tsToken = null; },
-    "error-callback": () => { state.tsToken = null; }
+    "error-callback": code => {
+      state.tsToken = null;
+      if (/^(1101|1102|1104|4000)/.test(String(code))) {
+        setOffline("Submissions are offline: the security check is misconfigured for this site (" + code + "). Contact command before attempting the assessment.");
+        return true;
+      }
+      return false;
+    }
   });
 };
 
+const OFFLINE_REASONS = {
+  webhook: "the Discord webhook is missing or invalid on the relay",
+  webhook_dead: "Discord reports the webhook was deleted",
+  turnstile: "the Turnstile secret is missing on the relay",
+  turnstile_secret: "the Turnstile secret on the relay is wrong",
+  answer_key: "the answer key does not match the current questions",
+  bank: "the relay cannot load the questions",
+  site_url: "SITE_URL is missing on the relay",
+  allowed_origin: "ALLOWED_ORIGIN is missing on the relay"
+};
+
+const offlineText = code => "Submissions are offline: " + (OFFLINE_REASONS[code] || "the submission relay is not fully configured") + (code ? " (" + code + ")" : "") + ". Contact command before attempting the assessment.";
+const REFRESH_TEXT = "The assessment was just updated. Wait a minute, then hard-refresh this page (Ctrl+Shift+R).";
+
 const checkLink = async () => {
-  if (!relayBase) {
+  if (relayBase === null) {
     setOffline("Submissions are offline: no submission relay is configured. Contact command before attempting the assessment.");
     return;
   }
-  const h = await api("/health", undefined, 10000);
+  if (relayBase === undefined) {
+    setOffline("Submissions are offline: the relay address in config.js is not a valid https:// URL. Contact command before attempting the assessment.");
+    return;
+  }
+  const h = await api("/health", undefined, 15000);
   if (!h.ok) {
     setOffline(h.status === "network" || h.status === 403
       ? "Submissions are offline: the submission relay could not be reached from this site. Contact command before attempting the assessment."
-      : "Submissions are offline: the submission relay is not fully configured (" + (h.data.error || "HTTP " + h.status) + "). Contact command before attempting the assessment.");
+      : offlineText(h.data.error || "HTTP " + h.status));
+    return;
+  }
+  if (h.data.fp && h.data.fp !== state.fp) {
+    setOffline(REFRESH_TEXT);
     return;
   }
   state.turnstile = Boolean(h.data.turnstile);
@@ -262,6 +296,7 @@ const bumpAttempt = () => {
 const startError = res => {
   const e = res.data.error;
   if (e === "turnstile") return "SECURITY CHECK FAILED: TRY AGAIN";
+  if (e === "turnstile_unavailable") return "SECURITY CHECK UNAVAILABLE: TRY AGAIN SHORTLY";
   if (e === "rate") return "TOO MANY ATTEMPTS: WAIT A FEW MINUTES";
   if (e === "callsign" || e === "rank") return "INVALID CALLSIGN OR RANK";
   if (res.status === "network") return "RELAY UNREACHABLE: CHECK YOUR CONNECTION";
@@ -281,18 +316,21 @@ const start = async () => {
   state.starting = true;
   $("startBtn").disabled = true;
   const token = state.tsToken;
-  const pending = api("/start", { callsign: cleanCallsign(), rank: $("rank").value, turnstile: token });
+  const pending = api("/start", { callsign: cleanCallsign(), rank: $("rank").value, turnstile: token, fp: state.fp });
   show("boot");
   const [, res] = await Promise.all([boot(), pending]);
   if (state.turnstile) resetTurnstile();
   if (!res.ok) {
     state.starting = false;
-    $("startBtn").disabled = false;
     show("gate");
+    if (res.data.error === "offline") setOffline(offlineText(res.data.reason));
+    else if (res.data.error === "bank_changed") setOffline(REFRESH_TEXT);
+    else $("startBtn").disabled = false;
     toast(startError(res));
     return;
   }
   state.session = res.data.session;
+  state.ref = typeof res.data.ref === "string" ? res.data.ref : "";
   state.order = shuffle(BANK.map((_, i) => i));
   state.optOrder = BANK.map(q => shuffle(q.a.map((_, i) => i)));
   state.answers = Array(BANK.length).fill(null);
@@ -466,6 +504,8 @@ const failText = res => {
   if (e === "payload") return "submission rejected";
   if (e === "bank_changed") return "assessment changed during your attempt";
   if (e === "discord") return "Discord rejected delivery";
+  if (e === "busy") return "relay busy";
+  if (e === "offline") return "relay offline";
   if (res.status === "network") return "network error";
   return "HTTP " + res.status;
 };
@@ -473,8 +513,9 @@ const failText = res => {
 const transmit = async body => {
   let last = { ok: false, status: "network", data: {} };
   for (let i = 1; i <= MAX_SEND_TRIES; i++) {
-    last = await api("/submit", body, 45000);
+    last = await api("/submit", body, 60000);
     if (last.ok) return last;
+    if (typeof last.data.receipt === "string") body.receipt = last.data.receipt;
     const upstream = Number(last.data.status);
     const permanent = last.data.error === "discord" && upstream >= 400 && upstream < 500 && upstream !== 429;
     const retryable = !permanent && (last.status === "network" || last.status === 429 || (typeof last.status === "number" && last.status >= 500));
@@ -507,7 +548,7 @@ const setDelivery = (mode, detail) => {
     st.textContent = "Response Transmitted";
     $("txBar").style.width = "100%";
     $("resultMsg").textContent = "Your responses have been sealed and delivered to the NSA Cybersecurity Directorate for command review.";
-    $("rRef").textContent = detail;
+    $("rRef").textContent = detail || state.ref || "—";
     $("rIntegrity").textContent = "Delivered (confirmed)" + (state.submission.reason === "Time Expired" ? " • window expired" : "");
     fail.classList.add("hidden");
     chip.textContent = "PACKAGE SEALED";
@@ -529,7 +570,7 @@ const deliver = async () => {
   if (!state.submission || state.delivery === "sending" || state.delivery === "sent") return;
   setDelivery("sending");
   const res = await transmit(state.submission);
-  if (res.ok) setDelivery("sent", res.data.ref || "—");
+  if (res.ok) setDelivery("sent", res.data.ref || state.ref);
   else setDelivery("failed", failText(res));
 };
 
@@ -554,7 +595,7 @@ const finish = async (reason) => {
   };
   $("rCandidate").textContent = cleanCallsign();
   $("rRank").textContent = $("rank").value;
-  $("rRef").textContent = "Pending";
+  $("rRef").textContent = state.ref || "Pending";
   $("rTime").textContent = new Date(finishedAt).toUTCString();
   $("rDur").textContent = fmtDur(finishedAt - state.startedAt);
   show("result");
