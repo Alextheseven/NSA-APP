@@ -1,0 +1,8 @@
+name = "nsa-relay"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+[vars]
+ALLOWED_ORIGIN = "https://alextheseven.github.io"
+SITE_URL = "https://alextheseven.github.io/NSA-APP/"
+BOT_NAME = "NSA Recruitment Terminal"

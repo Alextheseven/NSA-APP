@@ -31,7 +31,7 @@
     </a>
     <div class="nav-cta">
       <span class="chip" id="clockChip">00:00:00Z</span>
-      <span class="chip live" id="statusChip">SECURE LINK</span>
+      <span class="chip live" id="statusChip">CHECKING LINK</span>
     </div>
   </div>
 </header>
@@ -54,9 +54,9 @@
   </div>
   <div class="hero-body">
     <div class="grid">
-      <div class="stat"><b id="statQ">00</b><span>Scenario items</span></div>
-      <div class="stat"><b id="statT">00 min</b><span>Assessment window</span></div>
-      <div class="stat"><b>80%</b><span>Qualification bar</span></div>
+      <div class="stat"><b id="statQ">—</b><span>Scenario items</span></div>
+      <div class="stat"><b id="statT">—</b><span>Assessment window</span></div>
+      <div class="stat"><b id="statP">—</b><span>Qualification bar</span></div>
       <div class="stat"><b>2</b><span>Difficulty tiers</span></div>
     </div>
     <div class="section-label">Evaluated Domains</div>
@@ -85,7 +85,8 @@
       <label class="checkbox-label" id="lPc"><input id="pc" type="checkbox"><span>I confirm I am completing this assessment on a PC workstation.</span></label>
       <label class="checkbox-label" id="lAck"><input id="ack" type="checkbox"><span>I will complete this assessment without outside assistance and understand that window focus loss is recorded.</span></label>
     </div>
-    <button class="btn primary lg" id="startBtn" type="button">Initialize Assessment</button>
+    <div class="turnstile hidden" id="turnstileBox"></div>
+    <button class="btn primary lg" id="startBtn" type="button" disabled>Initialize Assessment</button>
     <p class="small" style="margin-top: 16px;">No answer explanations or scores are displayed. Responses are transmitted for command review.</p>
   </div>
 </section>
@@ -222,7 +223,6 @@
 </footer>
 <script src="assets/js/site.js"></script>
 <script src="assets/js/config.js"></script>
-<script src="assets/js/bank.js"></script>
 <script src="assets/js/assessment.js"></script>
 </body>
 </html>
